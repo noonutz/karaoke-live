@@ -10,6 +10,10 @@
   --muted-fg:#D7E0EC; --border:#475569; --accent:#22C55E;
   --on-accent:#0F172A; --danger:#F87171; --warn:#FBBF24;
   --radius:14px; --focus:#7DD3FC;
+  --chip:rgba(34,197,94,.12);
+  --teal:#2DD4BF; --teal-70:rgba(45,212,191,.7);
+  --fg-70:rgba(248,250,252,.7);
+  --ease:cubic-bezier(.2,.7,.3,1);
 }
 *{box-sizing:border-box}
 html,body{height:100%}
@@ -17,62 +21,87 @@ body{
   margin:0; background:var(--bg); color:var(--fg);
   font-family:system-ui,-apple-system,"Segoe UI","Noto Sans Thai",sans-serif;
   font-size:16px; line-height:1.5;
-  display:flex; flex-direction:column; min-height:100vh;
+  display:flex; flex-direction:column; height:100vh; overflow:hidden;
 }
 button,select,input{font:inherit}
 :focus-visible{outline:3px solid var(--focus); outline-offset:2px; border-radius:6px}
 header{
   display:flex; align-items:center; justify-content:space-between;
-  gap:12px; padding:12px 20px; border-bottom:1px solid var(--border);
+  gap:12px; padding:10px 20px; border-bottom:1px solid var(--border);
+  flex:none;
 }
 .brand{display:flex; align-items:center; gap:10px; font-weight:700; font-size:1.15rem}
-.brand svg{flex:none}
+.brand svg{flex:none; color:var(--accent)}
 .pill{
   display:inline-flex; align-items:center; gap:8px;
   padding:6px 14px; border-radius:999px; font-weight:600; font-size:.95rem;
   background:var(--muted); color:var(--fg); border:1px solid var(--border);
-  min-height:36px; transition:background .2s,color .2s;
+  min-height:36px; transition:background .18s var(--ease),color .18s var(--ease),border-color .18s var(--ease);
 }
-.pill .dot{width:10px;height:10px;border-radius:50%;background:var(--muted-fg)}
+.pill .dot{width:10px;height:10px;border-radius:50%;background:var(--muted-fg); flex:none}
+.pill .wave{display:none; color:var(--accent); flex:none}
 .pill.ready .dot{background:#94A3B8}
 .pill.playing{background:var(--muted); color:var(--fg); border-color:var(--accent)}
-.pill.playing .dot{background:#22C55E}
+.pill.playing .dot{background:#22C55E; animation:pulse-dot 1.6s ease-in-out infinite}
+.pill.playing .wave{display:inline-flex}
 .pill.error{background:#3B1420; color:#FECACA; border-color:var(--danger)}
 .pill.error .dot{background:var(--danger)}
+@keyframes pulse-dot{
+  0%,100%{transform:scale(1); opacity:1}
+  50%{transform:scale(1.4); opacity:.6}
+}
 .status-group{display:flex; align-items:center; gap:10px}
 .demo-badge{
-  display:inline-flex; align-items:center; padding:6px 12px; border-radius:999px;
+  display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:999px;
   font-size:.8rem; font-weight:700; white-space:nowrap;
   color:var(--accent); border:1px solid var(--accent); min-height:36px;
 }
+.demo-badge svg{flex:none}
 .demo-badge[hidden]{display:none}
 main{
-  flex:1; display:grid; gap:14px; padding:16px 20px;
-  grid-template-columns:1.1fr 1fr 1fr; align-content:start;
+  flex:1; min-height:0; overflow:hidden;
+  display:grid; gap:12px; padding:12px 20px;
+  grid-template-columns:1.1fr 1fr 1fr; align-content:stretch;
   max-width:1400px; width:100%; margin:0 auto;
 }
 .card{
   background:var(--card); border:1px solid var(--border);
-  border-radius:var(--radius); padding:16px;
+  border-radius:var(--radius); padding:14px 16px;
   backdrop-filter:blur(12px);
+  display:flex; flex-direction:column; min-height:0;
 }
-.card h2{margin:0 0 12px; font-size:1rem; font-weight:600; color:var(--muted-fg)}
+.card-head{display:flex; align-items:center; gap:12px; margin-bottom:12px}
+.icon-chip{
+  width:32px; height:32px; border-radius:8px; flex:none;
+  display:inline-flex; align-items:center; justify-content:center;
+  background:var(--chip); color:var(--accent);
+}
+.icon-chip svg{width:24px; height:24px}
+.card-head h2{margin:0; font-size:1rem; font-weight:600; color:var(--fg); line-height:1.35}
+.card-head h2 .en{display:block; font-size:.72rem; font-weight:400; color:var(--fg-70)}
 .field{margin-bottom:12px}
 .field:last-child{margin-bottom:0}
+.field-head{display:flex; align-items:center; gap:8px; margin-bottom:6px}
+.field-head svg{flex:none; color:var(--muted-fg)}
+.field-head label{margin:0; font-weight:600}
 label{display:block; margin-bottom:6px; font-weight:600}
-.hint{font-size:.85rem; color:var(--muted-fg); margin-top:4px; min-height:1.2em}
+.hint{font-size:.85rem; color:var(--fg-70); margin-top:4px; min-height:1.2em}
 select{
   width:100%; background:var(--bg); color:var(--fg);
   border:1px solid var(--border); border-radius:10px;
   padding:10px 12px; min-height:44px; cursor:pointer;
+  transition:border-color .18s var(--ease),background .18s var(--ease);
 }
+select:hover{border-color:var(--muted-fg)}
 select:disabled{opacity:.55; cursor:not-allowed}
 .seg{display:flex; gap:8px}
 .seg button{
   flex:1; min-height:44px; border-radius:10px; cursor:pointer;
   border:1px solid var(--border); background:var(--bg); color:var(--fg);
-  font-weight:600; transition:background .15s,border-color .15s;
+  font-weight:600; transition:background .18s var(--ease),border-color .18s var(--ease),transform .1s var(--ease);
 }
+.seg button:hover{border-color:var(--muted-fg)}
+.seg button:active{transform:scale(.98)}
 .seg button[aria-pressed="true"]{background:var(--accent); color:var(--on-accent); border-color:var(--accent)}
 .seg button:disabled{opacity:.55; cursor:not-allowed}
 .vocal-wrap{display:flex; align-items:center; gap:16px}
@@ -83,88 +112,106 @@ select:disabled{opacity:.55; cursor:not-allowed}
   align-items:center; justify-content:center; line-height:1.2;
   font-size:2rem; font-weight:700; font-variant-numeric:tabular-nums;
 }
-.ring .pct .remain{font-size:.75rem; font-weight:600; color:var(--muted-fg); margin-top:2px}
+.ring .pct .remain{font-size:.75rem; font-weight:600; color:var(--fg-70); margin-top:2px}
 .vocal-ctl{flex:1; min-width:0}
 input[type="range"]{width:100%; min-height:44px; accent-color:var(--accent); cursor:pointer}
-.meter-row{display:grid; grid-template-columns:56px 1fr auto; align-items:center; gap:10px; margin-bottom:12px}
+.sub-head{display:flex; align-items:center; gap:8px; margin:16px 0 12px; font-size:1rem; font-weight:600; color:var(--fg)}
+.sub-head svg{flex:none; color:var(--muted-fg)}
+.sub-head .en{font-size:.75rem; font-weight:400; color:var(--fg-70)}
+.meter-row{display:grid; grid-template-columns:20px 56px 1fr auto; align-items:center; gap:8px; margin-bottom:8px}
+.meter-row .micon{color:var(--muted-fg); display:inline-flex}
 .meter-row .name{font-weight:600}
 .meter-row .db{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.85rem; text-align:right; color:var(--fg); font-variant-numeric:tabular-nums; white-space:nowrap}
 .meter-row .db .unit{font-size:.75rem; color:var(--fg)}
 .bar{position:relative; height:18px; background:var(--bg); border:1px solid var(--border); border-radius:6px; overflow:hidden}
 .bar .fill{position:absolute; inset:0 auto 0 0; width:0%; background:linear-gradient(90deg,#22C55E,#A3E635 70%,#FBBF24 85%,#F87171); transition:width .12s linear}
-.bar .peak{position:absolute; top:0; bottom:0; width:3px; background:#fff; opacity:.9}
+.bar .ticks{position:absolute; inset:0; pointer-events:none;
+  background:repeating-linear-gradient(90deg,transparent 0 calc(5.5556% - 1px),rgba(248,250,252,.30) calc(5.5556% - 1px) 5.5556%)}
+.bar .peak{position:absolute; top:0; bottom:0; width:3px; background:#fff; opacity:.9; transition:left .12s linear,opacity 1.5s ease}
+.meter-scale{display:flex; justify-content:space-between; font-size:.72rem; color:var(--fg-70); font-variant-numeric:tabular-nums; margin:0 0 4px 84px}
 .transport{display:flex; gap:10px; margin-top:6px}
 .btn{
-  flex:1; min-height:52px; border-radius:12px; font-weight:700; font-size:1.05rem;
+  flex:1; height:44px; min-height:44px; border-radius:12px; font-weight:700; font-size:1.05rem;
   cursor:pointer; border:1px solid transparent;
   display:inline-flex; align-items:center; justify-content:center; gap:8px;
-  transition:filter .15s,transform .05s;
+  transition:filter .18s var(--ease),background .18s var(--ease),transform .1s var(--ease),border-color .18s var(--ease);
 }
+.btn svg{flex:none}
+.btn:hover{filter:brightness(1.08)}
 .btn:active{transform:scale(.98)}
 .btn-start{background:var(--accent); color:var(--on-accent)}
+.btn-start:disabled{background:transparent; color:var(--muted-fg); border-color:var(--border); opacity:.7}
 .btn-stop{background:transparent; color:var(--danger); border-color:var(--danger)}
-.btn:disabled{opacity:.45; cursor:not-allowed}
-.latency{margin-top:10px; color:var(--fg); font-size:.9rem; font-variant-numeric:tabular-nums}
-.key-big{font-size:3rem; font-weight:800; line-height:1.1; margin:4px 0 2px}
+.btn-stop:hover{background:rgba(248,113,113,.12)}
+/* the primary action follows the state: หยุด becomes the filled button while playing */
+.btn-stop:not(:disabled){background:var(--danger); color:#1B0B0B}
+.btn-stop:disabled{opacity:.5}
+.btn:disabled{opacity:.45; cursor:not-allowed; filter:none}
+.latency{display:flex; align-items:center; gap:8px; margin-top:10px; color:var(--fg); font-size:.9rem; font-variant-numeric:tabular-nums}
+.latency svg{flex:none; color:var(--muted-fg)}
+.latency .en{color:var(--muted-fg)}
+.key-big{font-size:2.75rem; font-weight:800; line-height:1.1; margin:4px 0 2px}
 .key-big.empty{color:var(--muted-fg); font-size:1.5rem; font-weight:600}
-.key-sub{color:var(--muted-fg); margin-bottom:10px}
-.camelot-line{display:flex; align-items:center; gap:10px; margin-bottom:12px}
-.camelot-line[hidden]{display:none}
-.camelot-label{font-size:.85rem; color:var(--muted-fg); font-weight:600}
+.key-sub{color:var(--fg-70); margin-bottom:10px}
+.key-meta{display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:12px}
+.key-meta:empty{display:none}
+.meta-cell{
+  margin:0; background:var(--muted); border:1px solid var(--border);
+  border-radius:10px; padding:8px 12px;
+  display:flex; flex-direction:column; gap:2px; min-width:0;
+}
+.meta-cell[hidden]{display:none}
+.meta-label{font-size:.75rem; color:var(--fg-70); font-weight:600}
+.meta-val{font-weight:700; font-size:1.05rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .camelot{
-  display:inline-block; font-weight:600; font-size:1.2rem;
+  display:inline-block; font-weight:600; font-size:1.2rem; align-self:flex-start;
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.02em;
   border:2px solid var(--accent); color:var(--accent);
   border-radius:10px; padding:2px 14px;
 }
-.chroma{margin:2px 0 12px}
+.chroma{margin:2px 0 8px}
 .chroma[hidden]{display:none}
-.chroma-bars{display:grid; grid-template-columns:repeat(12,1fr); gap:3px; align-items:end; height:60px}
-.chroma-bars .cb{background:linear-gradient(180deg,#4ADE80 0%,#16A34A 100%); border-radius:2px; min-height:2px; opacity:.9}
+.chroma-bars{display:grid; grid-template-columns:repeat(12,1fr); gap:3px; align-items:end; height:56px}
+.chroma-bars .cb{background:linear-gradient(180deg,var(--teal-70) 0%,rgba(45,212,191,.45) 100%); border-radius:2px; min-height:2px; opacity:.9}
 .chroma-bars .cb.low{background:var(--border); opacity:.7}
+.chroma-bars .cb.hl{background:linear-gradient(180deg,var(--teal) 0%,rgba(45,212,191,.55) 100%); opacity:1; box-shadow:0 0 0 1px rgba(45,212,191,.55)}
 .chroma-labels{display:grid; grid-template-columns:repeat(12,1fr); gap:3px; margin-top:3px}
-.chroma-labels span{font-size:.65rem; text-align:center; color:var(--muted-fg); font-variant-numeric:tabular-nums}
-.relative-line{margin:0 0 12px}
-.relative-line[hidden]{display:none}
-.relative-line .val{font-weight:700}
+.chroma-labels span{font-size:.72rem; text-align:center; color:var(--fg-70); font-variant-numeric:tabular-nums}
+.triad-legend{font-size:.72rem; color:var(--fg-70); margin:0 0 12px}
+.conf-head{display:flex; align-items:center; gap:8px; font-size:.85rem; color:var(--fg-70); font-weight:600; margin-bottom:6px}
+.conf-head svg{flex:none}
 .conf-track{height:10px; background:var(--bg); border:1px solid var(--border); border-radius:6px; overflow:hidden}
-.conf-fill{height:100%; width:0%; background:var(--accent); transition:width .3s}
-.conf-row{display:flex; justify-content:space-between; font-size:.85rem; color:var(--muted-fg); margin-top:4px}
+.conf-fill{height:100%; width:0%; background:var(--teal-70); transition:width .3s var(--ease)}
+.conf-row{display:flex; justify-content:space-between; font-size:.85rem; color:var(--fg-70); margin-top:4px}
 #confPct{color:var(--fg); font-variant-numeric:tabular-nums}
 #error{
-  display:none; margin:0 20px 16px; padding:12px 16px; border-radius:12px;
+  display:none; margin:0 20px 12px; padding:12px 16px; border-radius:12px;
   background:#3B1420; color:#FECACA; border:1px solid var(--danger);
-  font-weight:600;
+  font-weight:600; flex:none;
 }
 #error.show{display:block}
-footer{padding:8px 20px 14px; color:var(--muted-fg); font-size:.8rem; text-align:center}
-@media (min-width:1024px){
-  main{align-content:stretch}
-  .card{display:flex; flex-direction:column}
-  .key-card-spacer{flex:1}
-}
+footer{padding:6px 20px 10px; color:var(--fg-70); font-size:.72rem; text-align:center; flex:none}
+.key-card{justify-content:space-between}
 @media (max-width:759px){
+  body{height:auto; overflow:auto}
+  main{grid-template-columns:1fr; overflow:visible}
   .key-big{font-size:2.4rem}
 }
 @media (prefers-reduced-motion:reduce){
-  *{transition:none !important}
+  *,*::before,*::after{transition:none !important; animation:none !important}
 }
 </style>
 </head>
 <body>
 <header>
   <div class="brand">
-    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <circle cx="12" cy="12" r="9" stroke="#22C55E" stroke-width="2"/>
-      <rect x="9" y="8" width="2.4" height="8" rx="1.2" fill="#F8FAFC"/>
-      <rect x="12.8" y="8" width="2.4" height="8" rx="1.2" fill="#F8FAFC"/>
-    </svg>
+    <svg width="24" height="24" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M56,96v64a8,8,0,0,1-16,0V96a8,8,0,0,1,16,0ZM88,24a8,8,0,0,0-8,8V224a8,8,0,0,0,16,0V32A8,8,0,0,0,88,24Zm40,32a8,8,0,0,0-8,8V192a8,8,0,0,0,16,0V64A8,8,0,0,0,128,56Zm40,32a8,8,0,0,0-8,8v64a8,8,0,0,0,16,0V96A8,8,0,0,0,168,88Zm40-16a8,8,0,0,0-8,8v96a8,8,0,0,0,16,0V80A8,8,0,0,0,208,72Z"/></svg>
     <span>karaoke-live</span>
   </div>
   <div class="status-group">
-    <span id="demoBadge" class="demo-badge" hidden>โหมดทดลอง (demo)</span>
+    <span id="demoBadge" class="demo-badge" hidden><svg width="20" height="20" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M221.69,199.77,160,96.92V40h8a8,8,0,0,0,0-16H88a8,8,0,0,0,0,16h8V96.92L34.31,199.77A16,16,0,0,0,48,224H208a16,16,0,0,0,13.72-24.23ZM110.86,103.25A7.93,7.93,0,0,0,112,99.14V40h32V99.14a7.93,7.93,0,0,0,1.14,4.11L183.36,167c-12,2.37-29.07,1.37-51.75-10.11-15.91-8.05-31.05-12.32-45.22-12.81ZM48,208l28.54-47.58c14.25-1.74,30.31,1.85,47.82,10.72,19,9.61,35,12.88,48,12.88a69.89,69.89,0,0,0,19.55-2.7L208,208Z"/></svg>โหมดทดลอง (demo)</span>
     <div id="status" class="pill ready" role="status" aria-live="polite">
-      <span class="dot" aria-hidden="true"></span><span id="statusText">พร้อม</span>
+      <span class="dot" aria-hidden="true"></span><svg class="wave" width="20" height="20" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M239.24,131.4c-22,46.8-41.4,68.6-61.2,68.6-25.1,0-40.73-33.32-57.28-68.6C107.7,103.56,92.9,72,78,72c-16.4,0-36.31,37.21-46.72,59.4a8,8,0,0,1-14.48-6.8C38.71,77.8,58.16,56,78,56c25.1,0,40.73,33.32,57.28,68.6C148.3,152.44,163.1,184,178,184c16.4,0,36.31-37.21,46.72-59.4a8,8,0,0,1,14.48,6.8Z"/></svg><span id="statusText">พร้อม</span>
     </div>
   </div>
 </header>
@@ -173,15 +220,25 @@ footer{padding:8px 20px 14px; color:var(--muted-fg); font-size:.8rem; text-align
 
 <main>
   <section class="card" aria-labelledby="h-dev">
-    <h2 id="h-dev">อุปกรณ์เสียง <span lang="en">(devices)</span></h2>
-    <div class="field">
-      <label for="capture">รับเสียงเข้า <span lang="en">(capture)</span></label>
-      <select id="capture"></select>
-      <div class="hint">เช่น BlackHole / CABLE Input · เล่นเสียงออก: ลำโพง / หูฟัง</div>
+    <div class="card-head">
+      <span class="icon-chip" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M40,88H73a32,32,0,0,0,62,0h81a8,8,0,0,0,0-16H135a32,32,0,0,0-62,0H40a8,8,0,0,0,0,16Zm64-24A16,16,0,1,1,88,80,16,16,0,0,1,104,64ZM216,168H199a32,32,0,0,0-62,0H40a8,8,0,0,0,0,16h97a32,32,0,0,0,62,0h17a8,8,0,0,0,0-16Zm-48,24a16,16,0,1,1,16-16A16,16,0,0,1,168,192Z"/></svg></span>
+      <h2 id="h-dev">อุปกรณ์เสียง <span class="en" lang="en">(devices)</span></h2>
     </div>
     <div class="field">
-      <label for="output">เล่นเสียงออก <span lang="en">(output)</span></label>
+      <div class="field-head">
+        <svg width="20" height="20" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M128,176a48.05,48.05,0,0,0,48-48V64a48,48,0,0,0-96,0v64A48.05,48.05,0,0,0,128,176ZM96,64a32,32,0,0,1,64,0v64a32,32,0,0,1-64,0Zm40,143.6V240a8,8,0,0,1-16,0V207.6A80.11,80.11,0,0,1,48,128a8,8,0,0,1,16,0,64,64,0,0,0,128,0,8,8,0,0,1,16,0A80.11,80.11,0,0,1,136,207.6Z"/></svg>
+        <label for="capture">รับเสียงเข้า <span lang="en">(capture)</span></label>
+      </div>
+      <select id="capture"></select>
+      <div class="hint">เช่น BlackHole / CABLE Input</div>
+    </div>
+    <div class="field">
+      <div class="field-head">
+        <svg width="20" height="20" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M155.51,24.81a8,8,0,0,0-8.42.88L77.25,80H32A16,16,0,0,0,16,96v64a16,16,0,0,0,16,16H77.25l69.84,54.31A8,8,0,0,0,160,224V32A8,8,0,0,0,155.51,24.81ZM32,96H72v64H32ZM144,207.64,88,164.09V91.91l56-43.55Zm54-106.08a40,40,0,0,1,0,52.88,8,8,0,0,1-12-10.58,24,24,0,0,0,0-31.72,8,8,0,0,1,12-10.58ZM248,128a79.9,79.9,0,0,1-20.37,53.34,8,8,0,0,1-11.92-10.67,64,64,0,0,0,0-85.33,8,8,0,1,1,11.92-10.67A79.83,79.83,0,0,1,248,128Z"/></svg>
+        <label for="output">เล่นเสียงออก <span lang="en">(output)</span></label>
+      </div>
       <select id="output"></select>
+      <div class="hint">เช่น ลำโพง / หูฟัง</div>
     </div>
     <div class="field">
       <label id="engineLabel">เอนจิน <span lang="en">(engine)</span></label>
@@ -195,13 +252,19 @@ footer{padding:8px 20px 14px; color:var(--muted-fg); font-size:.8rem; text-align
   </section>
 
   <section class="card" aria-labelledby="h-mix">
-    <h2 id="h-mix">ระดับการตัดเสียงร้อง <span lang="en">(vocal cut)</span></h2>
+    <div class="card-head">
+      <span class="icon-chip" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M157.73,113.13A8,8,0,0,1,159.82,102L227.48,55.7a8,8,0,0,1,9,13.21l-67.67,46.3a7.92,7.92,0,0,1-4.51,1.4A8,8,0,0,1,157.73,113.13Zm80.87,85.09a8,8,0,0,1-11.12,2.08L136,137.7,93.49,166.78a36,36,0,1,1-9-13.19L121.83,128,84.44,102.41a35.86,35.86,0,1,1,9-13.19l143,97.87A8,8,0,0,1,238.6,198.22ZM80,180a20,20,0,1,0-5.86,14.14A19.85,19.85,0,0,0,80,180ZM74.14,90.13a20,20,0,1,0-28.28,0A19.85,19.85,0,0,0,74.14,90.13Z"/></svg></span>
+      <h2 id="h-mix">ระดับการตัดเสียงร้อง <span class="en" lang="en">(vocal cut)</span></h2>
+    </div>
     <div class="vocal-wrap">
       <div class="ring" aria-hidden="true">
         <svg width="132" height="132" viewBox="0 0 132 132">
-          <circle cx="66" cy="66" r="56" fill="none" stroke="#272F42" stroke-width="12"/>
-          <circle id="ringArc" cx="66" cy="66" r="56" fill="none" stroke="#22C55E"
-                  stroke-width="12" stroke-linecap="round" stroke-dasharray="351.8" stroke-dashoffset="52.8"/>
+          <circle cx="66" cy="66" r="56" fill="none" stroke="#272F42" stroke-width="16"/>
+          <circle id="ringArc" cx="66" cy="66" r="56" fill="none" stroke="rgba(45,212,191,.7)"
+                  stroke-width="16" stroke-linecap="round" stroke-dasharray="351.8" stroke-dashoffset="52.8"/>
+          <line x1="94.2" y1="27.2" x2="103.6" y2="14.2" stroke="#94A3B8" stroke-width="3" stroke-linecap="round">
+            <title>85% mono-guard default</title>
+          </line>
         </svg>
         <div class="pct"><span><span id="vocalPct">85</span><span style="font-size:1rem">%</span></span><span class="remain">เหลือเสียงร้อง <span id="vocalRemain">15</span>%</span></div>
       </div>
@@ -212,42 +275,50 @@ footer{padding:8px 20px 14px; color:var(--muted-fg); font-size:.8rem; text-align
         <div class="hint">0% = เสียงเดิม · 100% = ตัดออกมากที่สุด</div>
       </div>
     </div>
-    <h2 style="margin-top:16px">ระดับสัญญาณ <span lang="en">(meters)</span></h2>
+    <div class="sub-head"><svg width="20" height="20" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M240,128a8,8,0,0,1-8,8H204.94l-37.78,75.58A8,8,0,0,1,160,216h-.4a8,8,0,0,1-7.08-5.14L95.35,60.76,63.28,131.31A8,8,0,0,1,56,136H24a8,8,0,0,1,0-16H50.85L88.72,36.69a8,8,0,0,1,14.76.46l57.51,151,31.85-63.71A8,8,0,0,1,200,120h32A8,8,0,0,1,240,128Z"/></svg><span>ระดับสัญญาณ <span class="en" lang="en">(meters)</span></span></div>
     <div class="meter-row">
+      <span class="micon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M128,176a48.05,48.05,0,0,0,48-48V64a48,48,0,0,0-96,0v64A48.05,48.05,0,0,0,128,176ZM96,64a32,32,0,0,1,64,0v64a32,32,0,0,1-64,0Zm40,143.6V240a8,8,0,0,1-16,0V207.6A80.11,80.11,0,0,1,48,128a8,8,0,0,1,16,0,64,64,0,0,0,128,0,8,8,0,0,1,16,0A80.11,80.11,0,0,1,136,207.6Z"/></svg></span>
       <span class="name">เข้า</span>
-      <div class="bar" role="meter" aria-label="ระดับเสียงเข้า" aria-valuemin="-90" aria-valuemax="0" id="barInAria"><div class="fill" id="fillIn"></div><div class="peak" id="peakIn"></div></div>
+      <div class="bar" role="meter" aria-label="ระดับเสียงเข้า" aria-valuemin="-90" aria-valuemax="0" id="barInAria"><div class="fill" id="fillIn"></div><div class="ticks" aria-hidden="true"></div><div class="peak" id="peakIn"></div></div>
       <span class="db"><span id="dbIn">-90</span> <span class="unit">dB</span></span>
     </div>
     <div class="meter-row">
+      <span class="micon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M155.51,24.81a8,8,0,0,0-8.42.88L77.25,80H32A16,16,0,0,0,16,96v64a16,16,0,0,0,16,16H77.25l69.84,54.31A8,8,0,0,0,160,224V32A8,8,0,0,0,155.51,24.81ZM32,96H72v64H32ZM144,207.64,88,164.09V91.91l56-43.55Zm54-106.08a40,40,0,0,1,0,52.88,8,8,0,0,1-12-10.58,24,24,0,0,0,0-31.72,8,8,0,0,1,12-10.58ZM248,128a79.9,79.9,0,0,1-20.37,53.34,8,8,0,0,1-11.92-10.67,64,64,0,0,0,0-85.33,8,8,0,1,1,11.92-10.67A79.83,79.83,0,0,1,248,128Z"/></svg></span>
       <span class="name">ออก</span>
-      <div class="bar" role="meter" aria-label="ระดับเสียงออก" aria-valuemin="-90" aria-valuemax="0" id="barOutAria"><div class="fill" id="fillOut"></div><div class="peak" id="peakOut"></div></div>
+      <div class="bar" role="meter" aria-label="ระดับเสียงออก" aria-valuemin="-90" aria-valuemax="0" id="barOutAria"><div class="fill" id="fillOut"></div><div class="ticks" aria-hidden="true"></div><div class="peak" id="peakOut"></div></div>
       <span class="db"><span id="dbOut">-90</span> <span class="unit">dB</span></span>
     </div>
+    <div class="meter-scale" aria-hidden="true"><span>-90</span><span>-60</span><span>-30</span><span>0 dB</span></div>
     <div class="transport">
       <button type="button" class="btn btn-start" id="btnStart">
-        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2l9 6-9 6z" fill="currentColor"/></svg>
+        <svg width="20" height="20" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M232.4,114.49,88.32,26.35a16,16,0,0,0-16.2-.3A15.86,15.86,0,0,0,64,39.87V216.13A15.94,15.94,0,0,0,80,232a16.07,16.07,0,0,0,8.36-2.35L232.4,141.51a15.81,15.81,0,0,0,0-27ZM80,215.94V40l143.83,88Z"/></svg>
         เริ่ม
       </button>
       <button type="button" class="btn btn-stop" id="btnStop" disabled>
-        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1.5" fill="currentColor"/></svg>
+        <svg width="20" height="20" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M200,40H56A16,16,0,0,0,40,56V200a16,16,0,0,0,16,16H200a16,16,0,0,0,16-16V56A16,16,0,0,0,200,40Zm0,160H56V56H200V200Z"/></svg>
         หยุด
       </button>
     </div>
-    <div class="latency">ความหน่วง <span lang="en">(latency)</span>: <span id="latency">0</span> ms</div>
+    <div class="latency"><svg width="20" height="20" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm64-88a8,8,0,0,1-8,8H128a8,8,0,0,1-8-8V72a8,8,0,0,1,16,0v48h48A8,8,0,0,1,192,128Z"/></svg><span>ความหน่วง <span class="en" lang="en">(latency)</span>: <span id="latency">0</span> ms</span></div>
   </section>
 
-  <section class="card" aria-labelledby="h-key">
-    <h2 id="h-key">คีย์เพลง <span lang="en">(key)</span></h2>
+  <section class="card key-card" aria-labelledby="h-key">
+    <div class="card-head">
+      <span class="icon-chip" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M212.92,17.69a8,8,0,0,0-6.86-1.45l-128,32A8,8,0,0,0,72,56V166.08A36,36,0,1,0,88,196V110.25l112-28v51.83A36,36,0,1,0,216,164V24A8,8,0,0,0,212.92,17.69ZM52,216a20,20,0,1,1,20-20A20,20,0,0,1,52,216ZM88,93.75V62.25l112-28v31.5ZM180,184a20,20,0,1,1,20-20A20,20,0,0,1,180,184Z"/></svg></span>
+      <h2 id="h-key">คีย์เพลง <span class="en" lang="en">(key)</span></h2>
+    </div>
     <div class="key-big empty" id="keyName">— รอเสียง —</div>
     <div class="key-sub" id="keyMode">รอเสียงเข้า…</div>
-    <div class="camelot-line" id="camelotLine" hidden><span class="camelot-label">Camelot</span><span class="camelot" id="camelot">–</span></div>
-    <p class="relative-line" id="relativeLine" hidden>คีย์สัมพัทธ์: <span class="val" id="relativeKey">–</span></p>
+    <div class="key-meta">
+      <div class="meta-cell" id="camelotLine" hidden><span class="meta-label">Camelot</span><span class="camelot" id="camelot">–</span></div>
+      <p class="meta-cell" id="relativeLine" hidden><span class="meta-label">คีย์สัมพัทธ์</span><span class="meta-val" id="relativeKey">–</span></p>
+    </div>
     <div class="chroma" id="chromaBlock" hidden aria-hidden="true">
       <div class="chroma-bars" id="chromaBars"></div>
       <div class="chroma-labels" aria-hidden="true"><span>C</span><span>C#</span><span>D</span><span>D#</span><span>E</span><span>F</span><span>F#</span><span>G</span><span>G#</span><span>A</span><span>A#</span><span>B</span></div>
     </div>
-    <div class="key-card-spacer" aria-hidden="true"></div>
-    <label for="confFill" style="font-size:.85rem;color:var(--muted-fg)">ความมั่นใจ</label>
+    <p class="triad-legend">แถบสว่าง = โทนิค / เสียงที่ 3 / เสียงที่ 5</p>
+    <div class="conf-head"><svg width="20" height="20" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M207.06,72.67A111.24,111.24,0,0,0,128,40h-.4C66.07,40.21,16,91,16,153.13V176a16,16,0,0,0,16,16H224a16,16,0,0,0,16-16V152A111.25,111.25,0,0,0,207.06,72.67ZM224,176H119.71l54.76-75.3a8,8,0,0,0-12.94-9.42L99.92,176H32V153.13c0-3.08.15-6.12.43-9.13H56a8,8,0,0,0,0-16H35.27c10.32-38.86,44-68.24,84.73-71.66V80a8,8,0,0,0,16,0V56.33A96.14,96.14,0,0,1,221,128H200a8,8,0,0,0,0,16h23.67c.21,2.65.33,5.31.33,8Z"/></svg><label for="confFill" style="margin:0; font-weight:600">ความมั่นใจ</label></div>
     <div class="conf-track"><div class="conf-fill" id="confFill"></div></div>
     <div class="conf-row"><span id="confPct">0%</span><span>อัปเดตล่าสุด: <span id="keyAge">–</span></span></div>
   </section>
@@ -281,14 +352,25 @@ for (let i = 0; i < 12; i++) {
   bar.style.height = "3%";
   els.chromaBars.appendChild(bar);
 }
-function paintChroma(chroma) {
+const REDUCED_MOTION = window.matchMedia
+  && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+function triadIndices(key, mode) {
+  const i = NOTE_NAMES.indexOf(key);
+  if (i < 0) return [];
+  const third = (i + (mode === "minor" ? 3 : 4)) % 12;
+  return [i, third, (i + 7) % 12];
+}
+function paintChroma(chroma, triad) {
   const bars = els.chromaBars.children;
   const vals = (Array.isArray(chroma) && chroma.length === 12) ? chroma : null;
   const peak = vals ? Math.max.apply(null, vals.map(Number)) : 0;
   els.chromaBlock.hidden = false;
+  const hl = new Set(triad || []);
   for (let i = 0; i < 12; i++) {
     const h = (vals && peak > 0) ? Math.max(3, (Number(vals[i]) / peak) * 100) : 3;
     bars[i].style.height = h.toFixed(1) + "%";
+    bars[i].classList.toggle("low", !(vals && Number(vals[i]) / peak > 0.25));
+    bars[i].classList.toggle("hl", !!vals && hl.has(i));
   }
 }
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -309,6 +391,7 @@ const ENGINE_HINTS = {
 const CIRC = 2 * Math.PI * 56;
 let running = false, peakInDb = -90, peakOutDb = -90, keyUpdatedAt = null;
 let vocalTimer = null, es = null, esRetry = null;
+let peakInFade = null, peakOutFade = null;
 
 function showError(msg) {
   if (!msg) { els.error.classList.remove("show"); els.error.textContent = ""; return; }
@@ -366,13 +449,30 @@ function meterWidth(db) {
   const v = Math.max(-90, Math.min(0, Number(db) || -90));
   return ((v + 90) / 90) * 100;
 }
+function holdPeak(el, timerRef, setTimer) {
+  // Peak-hold marker: full brightness on a new peak, then fade over 1.5 s.
+  if (REDUCED_MOTION) { el.style.opacity = "0.9"; return; }
+  el.style.opacity = "0.9";
+  clearTimeout(timerRef());
+  setTimer(setTimeout(() => { el.style.opacity = "0.25"; }, 750));
+}
 function paintMeters(inDb, outDb) {
   inDb = Math.max(-90, Number(inDb) || -90);
   outDb = Math.max(-90, Number(outDb) || -90);
   els.fillIn.style.width = meterWidth(inDb) + "%";
   els.fillOut.style.width = meterWidth(outDb) + "%";
-  peakInDb = Math.max(inDb, peakInDb - 0.6);
-  peakOutDb = Math.max(outDb, peakOutDb - 0.6);
+  if (inDb >= peakInDb) {
+    peakInDb = inDb;
+    holdPeak(els.peakIn, () => peakInFade, (t) => { peakInFade = t; });
+  } else {
+    peakInDb = Math.max(inDb, peakInDb - 0.6);
+  }
+  if (outDb >= peakOutDb) {
+    peakOutDb = outDb;
+    holdPeak(els.peakOut, () => peakOutFade, (t) => { peakOutFade = t; });
+  } else {
+    peakOutDb = Math.max(outDb, peakOutDb - 0.6);
+  }
   els.peakIn.style.left = "calc(" + meterWidth(peakInDb) + "% - 2px)";
   els.peakOut.style.left = "calc(" + meterWidth(peakOutDb) + "% - 2px)";
   els.dbIn.textContent = inDb.toFixed(0);
@@ -387,7 +487,7 @@ function paintKey(k) {
     els.keyMode.textContent = running ? "กำลังฟัง…" : "รอเสียงเข้า…";
     els.camelotLine.hidden = true;
     els.relativeLine.hidden = true;
-    paintChroma(null);
+    paintChroma(null, []);
     els.confFill.style.width = "0%";
     els.confPct.textContent = "0%";
     return;
@@ -404,7 +504,7 @@ function paintKey(k) {
   } else {
     els.relativeLine.hidden = true;
   }
-  paintChroma(k.chroma);
+  paintChroma(k.chroma, triadIndices(k.key, k.mode));
   const conf = Math.round((Number(k.confidence) || 0) * 100);
   els.confFill.style.width = conf + "%";
   els.confPct.textContent = conf + "%";

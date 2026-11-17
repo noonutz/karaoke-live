@@ -5,6 +5,7 @@ Run: .venv/bin/python -m unittest discover -s tests -t . -v
 from __future__ import annotations
 
 import json
+import re
 import unittest
 import urllib.error
 import urllib.request
@@ -119,6 +120,23 @@ class PanelTests(unittest.TestCase):
                 self.assertIn(field, payload)
         finally:
             res.close()
+
+    def test_index_icons_and_buttons(self):
+        # Redesigned panel: inline Phosphor SVGs (no emoji), all buttons named.
+        _status, ctype, raw = _get(self.base, "/")
+        self.assertIn("text/html", ctype)
+        html = raw.decode("utf-8")
+        svgs = re.findall(r"<svg\b", html)
+        self.assertGreaterEqual(len(svgs), 8,
+                                f"expected >= 8 inline SVGs, found {len(svgs)}")
+        self.assertNotRegex(html, "[\U0001F000-\U0001FAFF☀-➿⬀-⯿]")
+        buttons = re.findall(r"<button\b([^>]*)>(.*?)</button>",
+                             html, re.DOTALL | re.IGNORECASE)
+        self.assertTrue(buttons, "expected at least one <button>")
+        for attrs, inner in buttons:
+            text = re.sub(r"<[^>]+>", "", inner).strip()
+            labelled = bool(text) or "aria-label" in attrs.lower()
+            self.assertTrue(labelled, f"button without label: {attrs!r}")
 
     def test_unknown_paths_404(self):
         try:
