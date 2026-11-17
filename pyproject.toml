@@ -21,3 +21,6 @@ karaokelive = "karaokelive.cli:main"
 
 [tool.setuptools]
 packages = ["karaokelive", "karaokelive.engines"]
+
+[tool.setuptools.package-data]
+karaokelive = ["web/*.html"]

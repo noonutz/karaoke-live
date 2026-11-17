@@ -51,9 +51,45 @@ karaokelive file song.mp3 song_karaoke.wav --vocal-level 100 --no-mono-guard
 
 # offline, best quality: real stems via the demucs CLI
 karaokelive prerender song.mp3 stems/
+
+# what key is this song in?
+karaokelive key song.mp3 --json
+
+# local control panel (phones and tablets on the same machine only)
+karaokelive ui            # http://127.0.0.1:8765
+karaokelive ui --demo     # exercise the UI with no audio device at all
 ```
 
 Stop with Ctrl-C.
+
+## Key detection
+
+`karaokelive key` reports the tonic, the mode, a confidence, the Camelot code and
+the 12-bin chroma. It is a chromagram (Hann STFT 4096/2048, 55 Hz - 4 kHz, mapped
+to pitch classes with `midi = 69 + 12*log2(f/440)`) correlated against the
+Krumhansl-Schmuckler major and minor profiles, rotated over all 24 keys.
+
+- Confidence blends the winning correlation with its margin over the runner-up, so
+  a genuinely ambiguous track (a bare fifth with no third, a single held chord) reads
+  low instead of guessing loudly. Below 50% the CLI says so in words.
+- The runners-up line shows **correlation scores**, not confidence -- a different
+  scale, labelled as such so 0.70 next to 48% cannot be misread as a winner.
+- Verified on synthesised progressions in all 12 major and all 12 minor keys:
+  24/24. Real recordings are harder than a synthetic triad (drums, bass, distorted
+  guitars, unresolved motion), so treat the confidence, not the key, as the signal.
+- Live mode feeds the same detector from a 10 s rolling window, recomputed at most
+  every 0.5 s so the audio callback never pays for it.
+
+## Control panel
+
+`karaokelive ui` serves a single-page control panel on 127.0.0.1: device pickers,
+the vocal-level knob with a "how much is left" readout, in/out level meters with
+peak hold, the detected key with its relative key, start/stop and the latency
+readout. It is bound to localhost and has no authentication, by design: it is a
+remote control for your own machine, not a service.
+
+`--demo` runs the whole UI against a simulated signal (meters and a rotating key),
+which is how it is developed and tested on a headless box.
 
 ## Routing (the part everyone gets wrong)
 
@@ -96,6 +132,9 @@ the delay. Cover the video, or delay it in OBS by the same amount.
 
 ## Status
 
+- `keydetect`: 24/24 on synthetic major and minor progressions across all 12 tonics.
+- `ui`: 7 tests over HTTP in demo mode; a real 1280x800 browser run verified the
+  meters, the key card and the 409-while-running path.
 - `center` and `channel`: covered by tests, verified end to end on real files
   (a centred 440 Hz tone drops 33.8 dB while panned content moves < 0.1 dB).
 - `demucs`: the chunking, crossfade and latency bookkeeping are tested against a

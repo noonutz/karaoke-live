@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
 
 from . import audio_io
 from .engines import ENGINES, create_engine
+from .keydetect import NOTE_NAMES, detect_key
 from .realtime import LiveRouter, format_devices, list_devices
 
 DEFAULT_SR = 48000
@@ -84,6 +87,41 @@ def cmd_live(args) -> int:
     return 0
 
 
+def _chroma_bar(chroma: np.ndarray) -> str:
+    """One-line chroma readout: 'C 12% ▏ D 3% ...' with a proportional block."""
+    blocks = (" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█")
+    parts = []
+    peak = float(np.max(chroma)) if len(chroma) else 0.0
+    for name, value in zip(NOTE_NAMES, chroma):
+        level = int(round(8 * float(value) / peak)) if peak > 0 else 0
+        parts.append(f"{name:>2} {float(value) * 100:3.0f}% {blocks[level]}")
+    return "chroma: " + " ".join(parts)
+
+
+def cmd_key(args) -> int:
+    from .keydetect import KeyResult
+
+    info = audio_io.probe(args.input)
+    sample_rate = info.sample_rate or DEFAULT_SR
+    data = audio_io.load(args.input, sample_rate)
+    result: KeyResult = detect_key(data, sample_rate)
+    if args.json:
+        payload = asdict(result)
+        payload["chroma"] = [float(v) for v in result.chroma]
+        print(json.dumps(payload, indent=2))
+        return 0
+    print(f"เพลงนี้อยู่ key: {result.key} {result.mode}   "
+          f"(Camelot {result.camelot})")
+    print(f"ความมั่นใจ: {result.confidence * 100:.0f}%")
+    alts = ", ".join(f"{label} (คะแนน {score:.2f})"
+                     for label, score in result.alternatives)
+    print(f"รองลงมา: {alts}")
+    if result.confidence < 0.5:
+        print("หมายเหตุ: ข้อมูลเสียงยังน้อย major/minor อาจสลับกันได้")
+    print(_chroma_bar(result.chroma))
+    return 0
+
+
 def cmd_prerender(args) -> int:
     """Offline separation with the demucs CLI; the best-quality option."""
     import shutil
@@ -148,13 +186,41 @@ def build_parser() -> argparse.ArgumentParser:
     add_engine_options(p_live)
     p_live.set_defaults(func=cmd_live)
 
+    p_key = sub.add_parser("key", help="detect the musical key of a file")
+    p_key.add_argument("input")
+    p_key.add_argument("--json", action="store_true",
+                       help="print the full result as JSON")
+    p_key.set_defaults(func=cmd_key)
+
     p_pre = sub.add_parser("prerender",
                            help="offline 2-stem separation with the demucs CLI")
     p_pre.add_argument("input")
     p_pre.add_argument("outdir", nargs="?", default="stems")
     p_pre.add_argument("--model", default="htdemucs")
     p_pre.set_defaults(func=cmd_prerender)
+
+    p_ui = sub.add_parser("ui", help="serve the local web control panel")
+    p_ui.add_argument("--port", type=int, default=8765)
+    p_ui.add_argument("--host", default="127.0.0.1")
+    p_ui.add_argument("--demo", action="store_true",
+                      help="synthesize meters/key with no audio device")
+    p_ui.set_defaults(func=cmd_ui)
     return parser
+
+
+def cmd_ui(args) -> int:
+    from .ui import ControlPanel
+
+    panel = ControlPanel(port=args.port, host=args.host, demo=args.demo)
+    print(f"เปิดแผงควบคุมที่ http://{args.host}:{args.port} "
+          f"กด Ctrl-C เพื่อหยุด")
+    try:
+        panel.serve_forever()
+    except KeyboardInterrupt:
+        print("\nหยุดแผงควบคุมแล้ว")
+    finally:
+        panel.shutdown()
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:

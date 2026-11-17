@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>karaoke-live — แผงควบคุม</title>
+<style>
+:root{
+  --bg:#0F172A; --fg:#F8FAFC; --card:#1B2336; --muted:#272F42;
+  --muted-fg:#D7E0EC; --border:#475569; --accent:#22C55E;
+  --on-accent:#0F172A; --danger:#F87171; --warn:#FBBF24;
+  --radius:14px; --focus:#7DD3FC;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; background:var(--bg); color:var(--fg);
+  font-family:system-ui,-apple-system,"Segoe UI","Noto Sans Thai",sans-serif;
+  font-size:16px; line-height:1.5;
+  display:flex; flex-direction:column; min-height:100vh;
+}
+button,select,input{font:inherit}
+:focus-visible{outline:3px solid var(--focus); outline-offset:2px; border-radius:6px}
+header{
+  display:flex; align-items:center; justify-content:space-between;
+  gap:12px; padding:12px 20px; border-bottom:1px solid var(--border);
+}
+.brand{display:flex; align-items:center; gap:10px; font-weight:700; font-size:1.15rem}
+.brand svg{flex:none}
+.pill{
+  display:inline-flex; align-items:center; gap:8px;
+  padding:6px 14px; border-radius:999px; font-weight:600; font-size:.95rem;
+  background:var(--muted); color:var(--fg); border:1px solid var(--border);
+  min-height:36px; transition:background .2s,color .2s;
+}
+.pill .dot{width:10px;height:10px;border-radius:50%;background:var(--muted-fg)}
+.pill.ready .dot{background:#94A3B8}
+.pill.playing{background:var(--muted); color:var(--fg); border-color:var(--accent)}
+.pill.playing .dot{background:#22C55E}
+.pill.error{background:#3B1420; color:#FECACA; border-color:var(--danger)}
+.pill.error .dot{background:var(--danger)}
+.status-group{display:flex; align-items:center; gap:10px}
+.demo-badge{
+  display:inline-flex; align-items:center; padding:6px 12px; border-radius:999px;
+  font-size:.8rem; font-weight:700; white-space:nowrap;
+  color:var(--accent); border:1px solid var(--accent); min-height:36px;
+}
+.demo-badge[hidden]{display:none}
+main{
+  flex:1; display:grid; gap:14px; padding:16px 20px;
+  grid-template-columns:1.1fr 1fr 1fr; align-content:start;
+  max-width:1400px; width:100%; margin:0 auto;
+}
+.card{
+  background:var(--card); border:1px solid var(--border);
+  border-radius:var(--radius); padding:16px;
+  backdrop-filter:blur(12px);
+}
+.card h2{margin:0 0 12px; font-size:1rem; font-weight:600; color:var(--muted-fg)}
+.field{margin-bottom:12px}
+.field:last-child{margin-bottom:0}
+label{display:block; margin-bottom:6px; font-weight:600}
+.hint{font-size:.85rem; color:var(--muted-fg); margin-top:4px; min-height:1.2em}
+select{
+  width:100%; background:var(--bg); color:var(--fg);
+  border:1px solid var(--border); border-radius:10px;
+  padding:10px 12px; min-height:44px; cursor:pointer;
+}
+select:disabled{opacity:.55; cursor:not-allowed}
+.seg{display:flex; gap:8px}
+.seg button{
+  flex:1; min-height:44px; border-radius:10px; cursor:pointer;
+  border:1px solid var(--border); background:var(--bg); color:var(--fg);
+  font-weight:600; transition:background .15s,border-color .15s;
+}
+.seg button[aria-pressed="true"]{background:var(--accent); color:var(--on-accent); border-color:var(--accent)}
+.seg button:disabled{opacity:.55; cursor:not-allowed}
+.vocal-wrap{display:flex; align-items:center; gap:16px}
+.ring{position:relative; width:132px; height:132px; flex:none}
+.ring svg{transform:rotate(-90deg)}
+.ring .pct{
+  position:absolute; inset:0; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; line-height:1.2;
+  font-size:2rem; font-weight:700; font-variant-numeric:tabular-nums;
+}
+.ring .pct .remain{font-size:.75rem; font-weight:600; color:var(--muted-fg); margin-top:2px}
+.vocal-ctl{flex:1; min-width:0}
+input[type="range"]{width:100%; min-height:44px; accent-color:var(--accent); cursor:pointer}
+.meter-row{display:grid; grid-template-columns:56px 1fr auto; align-items:center; gap:10px; margin-bottom:12px}
+.meter-row .name{font-weight:600}
+.meter-row .db{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.85rem; text-align:right; color:var(--fg); font-variant-numeric:tabular-nums; white-space:nowrap}
+.meter-row .db .unit{font-size:.75rem; color:var(--fg)}
+.bar{position:relative; height:18px; background:var(--bg); border:1px solid var(--border); border-radius:6px; overflow:hidden}
+.bar .fill{position:absolute; inset:0 auto 0 0; width:0%; background:linear-gradient(90deg,#22C55E,#A3E635 70%,#FBBF24 85%,#F87171); transition:width .12s linear}
+.bar .peak{position:absolute; top:0; bottom:0; width:3px; background:#fff; opacity:.9}
+.transport{display:flex; gap:10px; margin-top:6px}
+.btn{
+  flex:1; min-height:52px; border-radius:12px; font-weight:700; font-size:1.05rem;
+  cursor:pointer; border:1px solid transparent;
+  display:inline-flex; align-items:center; justify-content:center; gap:8px;
+  transition:filter .15s,transform .05s;
+}
+.btn:active{transform:scale(.98)}
+.btn-start{background:var(--accent); color:var(--on-accent)}
+.btn-stop{background:transparent; color:var(--danger); border-color:var(--danger)}
+.btn:disabled{opacity:.45; cursor:not-allowed}
+.latency{margin-top:10px; color:var(--fg); font-size:.9rem; font-variant-numeric:tabular-nums}
+.key-big{font-size:3rem; font-weight:800; line-height:1.1; margin:4px 0 2px}
+.key-big.empty{color:var(--muted-fg); font-size:1.5rem; font-weight:600}
+.key-sub{color:var(--muted-fg); margin-bottom:10px}
+.camelot-line{display:flex; align-items:center; gap:10px; margin-bottom:12px}
+.camelot-line[hidden]{display:none}
+.camelot-label{font-size:.85rem; color:var(--muted-fg); font-weight:600}
+.camelot{
+  display:inline-block; font-weight:600; font-size:1.2rem;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.02em;
+  border:2px solid var(--accent); color:var(--accent);
+  border-radius:10px; padding:2px 14px;
+}
+.chroma{margin:2px 0 12px}
+.chroma[hidden]{display:none}
+.chroma-bars{display:grid; grid-template-columns:repeat(12,1fr); gap:3px; align-items:end; height:60px}
+.chroma-bars .cb{background:linear-gradient(180deg,#4ADE80 0%,#16A34A 100%); border-radius:2px; min-height:2px; opacity:.9}
+.chroma-bars .cb.low{background:var(--border); opacity:.7}
+.chroma-labels{display:grid; grid-template-columns:repeat(12,1fr); gap:3px; margin-top:3px}
+.chroma-labels span{font-size:.65rem; text-align:center; color:var(--muted-fg); font-variant-numeric:tabular-nums}
+.relative-line{margin:0 0 12px}
+.relative-line[hidden]{display:none}
+.relative-line .val{font-weight:700}
+.conf-track{height:10px; background:var(--bg); border:1px solid var(--border); border-radius:6px; overflow:hidden}
+.conf-fill{height:100%; width:0%; background:var(--accent); transition:width .3s}
+.conf-row{display:flex; justify-content:space-between; font-size:.85rem; color:var(--muted-fg); margin-top:4px}
+#confPct{color:var(--fg); font-variant-numeric:tabular-nums}
+#error{
+  display:none; margin:0 20px 16px; padding:12px 16px; border-radius:12px;
+  background:#3B1420; color:#FECACA; border:1px solid var(--danger);
+  font-weight:600;
+}
+#error.show{display:block}
+footer{padding:8px 20px 14px; color:var(--muted-fg); font-size:.8rem; text-align:center}
+@media (min-width:1024px){
+  main{align-content:stretch}
+  .card{display:flex; flex-direction:column}
+  .key-card-spacer{flex:1}
+}
+@media (max-width:759px){
+  .key-big{font-size:2.4rem}
+}
+@media (prefers-reduced-motion:reduce){
+  *{transition:none !important}
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" stroke="#22C55E" stroke-width="2"/>
+      <rect x="9" y="8" width="2.4" height="8" rx="1.2" fill="#F8FAFC"/>
+      <rect x="12.8" y="8" width="2.4" height="8" rx="1.2" fill="#F8FAFC"/>
+    </svg>
+    <span>karaoke-live</span>
+  </div>
+  <div class="status-group">
+    <span id="demoBadge" class="demo-badge" hidden>โหมดทดลอง (demo)</span>
+    <div id="status" class="pill ready" role="status" aria-live="polite">
+      <span class="dot" aria-hidden="true"></span><span id="statusText">พร้อม</span>
+    </div>
+  </div>
+</header>
+
+<div id="error" role="alert"></div>
+
+<main>
+  <section class="card" aria-labelledby="h-dev">
+    <h2 id="h-dev">อุปกรณ์เสียง <span lang="en">(devices)</span></h2>
+    <div class="field">
+      <label for="capture">รับเสียงเข้า <span lang="en">(capture)</span></label>
+      <select id="capture"></select>
+      <div class="hint">เช่น BlackHole / CABLE Input · เล่นเสียงออก: ลำโพง / หูฟัง</div>
+    </div>
+    <div class="field">
+      <label for="output">เล่นเสียงออก <span lang="en">(output)</span></label>
+      <select id="output"></select>
+    </div>
+    <div class="field">
+      <label id="engineLabel">เอนจิน <span lang="en">(engine)</span></label>
+      <div class="seg" role="group" aria-labelledby="engineLabel">
+        <button type="button" data-engine="center" aria-pressed="true">center</button>
+        <button type="button" data-engine="channel" aria-pressed="false">channel</button>
+        <button type="button" data-engine="demucs" aria-pressed="false">demucs</button>
+      </div>
+      <div class="hint" id="engineHint"></div>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="h-mix">
+    <h2 id="h-mix">ระดับการตัดเสียงร้อง <span lang="en">(vocal cut)</span></h2>
+    <div class="vocal-wrap">
+      <div class="ring" aria-hidden="true">
+        <svg width="132" height="132" viewBox="0 0 132 132">
+          <circle cx="66" cy="66" r="56" fill="none" stroke="#272F42" stroke-width="12"/>
+          <circle id="ringArc" cx="66" cy="66" r="56" fill="none" stroke="#22C55E"
+                  stroke-width="12" stroke-linecap="round" stroke-dasharray="351.8" stroke-dashoffset="52.8"/>
+        </svg>
+        <div class="pct"><span><span id="vocalPct">85</span><span style="font-size:1rem">%</span></span><span class="remain">เหลือเสียงร้อง <span id="vocalRemain">15</span>%</span></div>
+      </div>
+      <div class="vocal-ctl">
+        <label for="vocal">ระดับการตัดเสียงร้อง (%)</label>
+        <input type="range" id="vocal" min="0" max="100" step="1" value="85"
+               aria-valuetext="85 เปอร์เซ็นต์">
+        <div class="hint">0% = เสียงเดิม · 100% = ตัดออกมากที่สุด</div>
+      </div>
+    </div>
+    <h2 style="margin-top:16px">ระดับสัญญาณ <span lang="en">(meters)</span></h2>
+    <div class="meter-row">
+      <span class="name">เข้า</span>
+      <div class="bar" role="meter" aria-label="ระดับเสียงเข้า" aria-valuemin="-90" aria-valuemax="0" id="barInAria"><div class="fill" id="fillIn"></div><div class="peak" id="peakIn"></div></div>
+      <span class="db"><span id="dbIn">-90</span> <span class="unit">dB</span></span>
+    </div>
+    <div class="meter-row">
+      <span class="name">ออก</span>
+      <div class="bar" role="meter" aria-label="ระดับเสียงออก" aria-valuemin="-90" aria-valuemax="0" id="barOutAria"><div class="fill" id="fillOut"></div><div class="peak" id="peakOut"></div></div>
+      <span class="db"><span id="dbOut">-90</span> <span class="unit">dB</span></span>
+    </div>
+    <div class="transport">
+      <button type="button" class="btn btn-start" id="btnStart">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2l9 6-9 6z" fill="currentColor"/></svg>
+        เริ่ม
+      </button>
+      <button type="button" class="btn btn-stop" id="btnStop" disabled>
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1.5" fill="currentColor"/></svg>
+        หยุด
+      </button>
+    </div>
+    <div class="latency">ความหน่วง <span lang="en">(latency)</span>: <span id="latency">0</span> ms</div>
+  </section>
+
+  <section class="card" aria-labelledby="h-key">
+    <h2 id="h-key">คีย์เพลง <span lang="en">(key)</span></h2>
+    <div class="key-big empty" id="keyName">— รอเสียง —</div>
+    <div class="key-sub" id="keyMode">รอเสียงเข้า…</div>
+    <div class="camelot-line" id="camelotLine" hidden><span class="camelot-label">Camelot</span><span class="camelot" id="camelot">–</span></div>
+    <p class="relative-line" id="relativeLine" hidden>คีย์สัมพัทธ์: <span class="val" id="relativeKey">–</span></p>
+    <div class="chroma" id="chromaBlock" hidden aria-hidden="true">
+      <div class="chroma-bars" id="chromaBars"></div>
+      <div class="chroma-labels" aria-hidden="true"><span>C</span><span>C#</span><span>D</span><span>D#</span><span>E</span><span>F</span><span>F#</span><span>G</span><span>G#</span><span>A</span><span>A#</span><span>B</span></div>
+    </div>
+    <div class="key-card-spacer" aria-hidden="true"></div>
+    <label for="confFill" style="font-size:.85rem;color:var(--muted-fg)">ความมั่นใจ</label>
+    <div class="conf-track"><div class="conf-fill" id="confFill"></div></div>
+    <div class="conf-row"><span id="confPct">0%</span><span>อัปเดตล่าสุด: <span id="keyAge">–</span></span></div>
+  </section>
+</main>
+
+<div id="hint-live" style="display:none"></div>
+<footer>karaoke-live · แผงควบคุมบนเครื่อง (localhost เท่านั้น) · กด <kbd>Space</kbd> เพื่อเริ่ม/หยุด</footer>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const els = {
+  status: $("status"), statusText: $("statusText"), error: $("error"),
+  capture: $("capture"), output: $("output"),
+  engineHint: $("engineHint"), vocal: $("vocal"), vocalPct: $("vocalPct"),
+  ringArc: $("ringArc"), fillIn: $("fillIn"), fillOut: $("fillOut"),
+  peakIn: $("peakIn"), peakOut: $("peakOut"), dbIn: $("dbIn"), dbOut: $("dbOut"),
+  barInAria: $("barInAria"), barOutAria: $("barOutAria"),
+  btnStart: $("btnStart"), btnStop: $("btnStop"), latency: $("latency"),
+  keyName: $("keyName"), keyMode: $("keyMode"), camelot: $("camelot"),
+  camelotLine: $("camelotLine"), relativeLine: $("relativeLine"),
+  relativeKey: $("relativeKey"), vocalRemain: $("vocalRemain"),
+  demoBadge: $("demoBadge"), chromaBlock: $("chromaBlock"),
+  chromaBars: $("chromaBars"),
+  confFill: $("confFill"), confPct: $("confPct"), keyAge: $("keyAge"),
+};
+els.chromaBars.innerHTML = "";
+for (let i = 0; i < 12; i++) {
+  const bar = document.createElement("div");
+  bar.className = "cb";
+  bar.style.height = "3%";
+  els.chromaBars.appendChild(bar);
+}
+function paintChroma(chroma) {
+  const bars = els.chromaBars.children;
+  const vals = (Array.isArray(chroma) && chroma.length === 12) ? chroma : null;
+  const peak = vals ? Math.max.apply(null, vals.map(Number)) : 0;
+  els.chromaBlock.hidden = false;
+  for (let i = 0; i < 12; i++) {
+    const h = (vals && peak > 0) ? Math.max(3, (Number(vals[i]) / peak) * 100) : 3;
+    bars[i].style.height = h.toFixed(1) + "%";
+  }
+}
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+function relativeKeyName(key, mode) {
+  // Relative major <-> minor shares the key signature, 3 semitones apart:
+  // A minor <-> C major, etc.
+  const i = NOTE_NAMES.indexOf(key);
+  if (i < 0) return null;
+  if (mode === "minor") return NOTE_NAMES[(i + 3) % 12] + " major";
+  if (mode === "major") return NOTE_NAMES[(i + 9) % 12] + " minor";
+  return null;
+}
+const ENGINE_HINTS = {
+  center: "ตัดเสียงกลางแบบ phase-cancel — ไม่ต้องลงอะไรเพิ่ม หน่วงต่ำ",
+  channel: "ใช้ข้างเดียว (สำหรับไฟล์ multiplex) — เลือกข้างขวาเป็นหลัก",
+  demucs: "แยกเสียงด้วย ML — คุณภาพดีสุด แต่ต้องลง torch และหน่วงสูง",
+};
+const CIRC = 2 * Math.PI * 56;
+let running = false, peakInDb = -90, peakOutDb = -90, keyUpdatedAt = null;
+let vocalTimer = null, es = null, esRetry = null;
+
+function showError(msg) {
+  if (!msg) { els.error.classList.remove("show"); els.error.textContent = ""; return; }
+  els.error.textContent = String(msg);
+  els.error.classList.add("show");
+}
+function setStatus() {
+  const err = els.error.classList.contains("show");
+  els.status.className = "pill " + (err ? "error" : running ? "playing" : "ready");
+  els.statusText.textContent = err ? "ผิดพลาด" : running ? "กำลังเล่น" : "พร้อม";
+}
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  let body = {};
+  try { body = await res.json(); } catch (_) { /* non-JSON: keep {} */ }
+  return { ok: res.ok, status: res.status, body };
+}
+let demoMode = false;
+function applyState(s) {
+  if (!s || typeof s !== "object") return;
+  running = !!s.running;
+  demoMode = !!s.demo;
+  els.demoBadge.hidden = !demoMode;
+  if (typeof s.vocal_level === "number") {
+    const pct = Math.round(s.vocal_level * 100);
+    els.vocal.value = String(pct);
+    paintVocal(pct);
+  }
+  if (typeof s.engine === "string") paintEngine(s.engine);
+  if (typeof s.latency_ms === "number") els.latency.textContent = s.latency_ms.toFixed(0);
+  if (s.meters) paintMeters(s.meters.in_db, s.meters.out_db);
+  if (s.key) paintKey(s.key);
+  if (typeof s.error === "string" && s.error) showError(s.error);
+  else if (!running) showError(null);
+  els.capture.disabled = running;
+  els.output.disabled = running;
+  document.querySelectorAll(".seg button").forEach((b) => { b.disabled = running; });
+  els.btnStart.disabled = running;
+  els.btnStop.disabled = !running;
+  setStatus();
+}
+function paintVocal(pct) {
+  els.vocalPct.textContent = String(pct);
+  els.vocalRemain.textContent = String(100 - pct);
+  els.vocal.setAttribute("aria-valuetext", pct + " เปอร์เซ็นต์");
+  els.ringArc.style.strokeDashoffset = String(CIRC * (1 - pct / 100));
+}
+function paintEngine(engine) {
+  document.querySelectorAll(".seg button").forEach((b) => {
+    b.setAttribute("aria-pressed", String(b.dataset.engine === engine));
+  });
+  els.engineHint.textContent = ENGINE_HINTS[engine] || "";
+}
+function meterWidth(db) {
+  const v = Math.max(-90, Math.min(0, Number(db) || -90));
+  return ((v + 90) / 90) * 100;
+}
+function paintMeters(inDb, outDb) {
+  inDb = Math.max(-90, Number(inDb) || -90);
+  outDb = Math.max(-90, Number(outDb) || -90);
+  els.fillIn.style.width = meterWidth(inDb) + "%";
+  els.fillOut.style.width = meterWidth(outDb) + "%";
+  peakInDb = Math.max(inDb, peakInDb - 0.6);
+  peakOutDb = Math.max(outDb, peakOutDb - 0.6);
+  els.peakIn.style.left = "calc(" + meterWidth(peakInDb) + "% - 2px)";
+  els.peakOut.style.left = "calc(" + meterWidth(peakOutDb) + "% - 2px)";
+  els.dbIn.textContent = inDb.toFixed(0);
+  els.dbOut.textContent = outDb.toFixed(0);
+  els.barInAria.setAttribute("aria-valuenow", inDb.toFixed(0));
+  els.barOutAria.setAttribute("aria-valuenow", outDb.toFixed(0));
+}
+function paintKey(k) {
+  if (!k || !k.key) {
+    els.keyName.textContent = "— รอเสียง —";
+    els.keyName.classList.add("empty");
+    els.keyMode.textContent = running ? "กำลังฟัง…" : "รอเสียงเข้า…";
+    els.camelotLine.hidden = true;
+    els.relativeLine.hidden = true;
+    paintChroma(null);
+    els.confFill.style.width = "0%";
+    els.confPct.textContent = "0%";
+    return;
+  }
+  els.keyName.textContent = k.key + " " + (k.mode || "");
+  els.keyName.classList.remove("empty");
+  els.keyMode.textContent = k.mode === "minor" ? "ไมเนอร์" : "เมเจอร์";
+  els.camelot.textContent = k.camelot || "–";
+  els.camelotLine.hidden = false;
+  const rel = relativeKeyName(k.key, k.mode);
+  if (rel) {
+    els.relativeKey.textContent = rel;
+    els.relativeLine.hidden = false;
+  } else {
+    els.relativeLine.hidden = true;
+  }
+  paintChroma(k.chroma);
+  const conf = Math.round((Number(k.confidence) || 0) * 100);
+  els.confFill.style.width = conf + "%";
+  els.confPct.textContent = conf + "%";
+  keyUpdatedAt = typeof k.updated_at === "number" ? k.updated_at * 1000 : Date.now();
+}
+function tickAge() {
+  if (!keyUpdatedAt) { els.keyAge.textContent = "–"; return; }
+  const s = Math.max(0, Math.round((Date.now() - keyUpdatedAt) / 1000));
+  els.keyAge.textContent = s < 5 ? "เมื่อสักครู่" : s < 60 ? s + " วินาทีที่แล้ว"
+    : Math.floor(s / 60) + " นาทีที่แล้ว";
+}
+setInterval(tickAge, 1000);
+
+async function loadDevices() {
+  const { body } = await api("/api/devices");
+  const emptyLabel = demoMode ? "โหมดทดลอง: ใช้สัญญาณจำลอง" : "— ไม่พบอุปกรณ์ —";
+  const fill = (sel, rows, keep) => {
+    sel.innerHTML = "";
+    const ph = document.createElement("option");
+    ph.value = "";
+    ph.textContent = rows.length ? "— เลือกอุปกรณ์ —" : emptyLabel;
+    sel.appendChild(ph);
+    (Array.isArray(rows) ? rows : []).forEach((d) => {
+      const o = document.createElement("option");
+      o.value = d.name || "";
+      o.textContent = (d.name || "?") + " (" + (d.hostapi || "") + ")";
+      sel.appendChild(o);
+    });
+    if (keep) sel.value = keep;
+  };
+  fill(els.capture, body.input, els.capture.value);
+  fill(els.output, body.output, body.output);
+}
+async function postConfig(patch) {
+  const { ok, status, body } = await api("/api/config", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!ok) showError(body.error || ("บันทึกไม่ได้ (HTTP " + status + ")"));
+  else { showError(null); applyState(body.state || body); }
+}
+async function toggle() {
+  showError(null);
+  const path = running ? "/api/stop" : "/api/start";
+  const { ok, body } = await api(path, { method: "POST" });
+  if (!ok) {
+    showError(body.error || "เริ่ม/หยุดไม่สำเร็จ");
+    if (body.devices) await loadDevices();
+  } else showError(null);
+  applyState(body.state || body);
+}
+
+els.capture.addEventListener("change", () => postConfig({ capture: els.capture.value }));
+els.output.addEventListener("change", () => postConfig({ output: els.output.value }));
+document.querySelectorAll(".seg button").forEach((b) => {
+  b.addEventListener("click", () => postConfig({ engine: b.dataset.engine }));
+});
+els.vocal.addEventListener("input", () => {
+  const pct = Number(els.vocal.value);
+  paintVocal(pct);
+  clearTimeout(vocalTimer);
+  vocalTimer = setTimeout(() => postConfig({ vocal_level: pct / 100 }), 250);
+});
+els.btnStart.addEventListener("click", toggle);
+els.btnStop.addEventListener("click", toggle);
+document.addEventListener("keydown", (e) => {
+  if (e.code !== "Space" || e.repeat) return;
+  const t = e.target;
+  const tag = (t && t.tagName) || "";
+  if (tag === "SELECT" || tag === "TEXTAREA" || tag === "BUTTON") return;
+  if (tag === "INPUT" && t.type !== "range") return;
+  e.preventDefault();
+  toggle();
+});
+
+function connectEvents() {
+  if (es) { try { es.close(); } catch (_) {} es = null; }
+  es = new EventSource("/api/events");
+  es.onmessage = (ev) => {
+    let d = null;
+    try { d = JSON.parse(ev.data); } catch (_) { return; }
+    if (!d || typeof d !== "object") return;
+    running = !!d.running;
+    if (d.meters) paintMeters(d.meters.in_db, d.meters.out_db);
+    if (d.key) paintKey(d.key);
+    if (typeof d.latency_ms === "number") els.latency.textContent = d.latency_ms.toFixed(0);
+    if (typeof d.error === "string" && d.error) showError(d.error);
+    els.btnStart.disabled = running;
+    els.btnStop.disabled = !running;
+    setStatus();
+  };
+  es.onerror = () => {
+    try { es.close(); } catch (_) {}
+    es = null;
+    clearTimeout(esRetry);
+    esRetry = setTimeout(connectEvents, 2000);
+  };
+}
+
+(async function init() {
+  paintEngine("center");
+  paintVocal(85);
+  const { body } = await api("/api/state");
+  applyState(body);
+  els.capture.value = body.capture || "";
+  els.output.value = body.output || "";
+  await loadDevices();
+  els.capture.value = body.capture || "";
+  els.output.value = body.output || "";
+  connectEvents();
+})();
+</script>
+</body>
+</html>
