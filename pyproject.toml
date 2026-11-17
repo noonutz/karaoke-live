@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "karaoke-live"
+version = "0.1.0"
+description = "Remove the lead vocal from any audio, live or offline"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+live = ["sounddevice>=0.4"]
+ml = ["demucs>=4.0", "torch", "torchaudio"]
+dev = ["pytest"]
+
+[project.scripts]
+karaokelive = "karaokelive.cli:main"
+
+[tool.setuptools]
+packages = ["karaokelive", "karaokelive.engines"]

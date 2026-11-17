@@ -1,0 +1,116 @@
+# karaoke-live
+
+Remove the lead vocal from whatever your computer is playing, live, and sing
+over it. Built for the case the existing tools miss: not "hear the voices in a
+movie", but "keep the music, drop the singer".
+
+Three engines, same interface:
+
+| engine | what it does | latency | deps |
+|---|---|---|---|
+| `center` (default) | phase-cancel the centre image, bass restored, 0-100% blend | **0** | numpy + ffmpeg |
+| `channel` | take one channel (multiplex sources: vocal hard left, music right) | **0** | numpy + ffmpeg |
+| `demucs` | real ML 2-stem separation, chunked | **~chunk_s** (default 2.5 s) | + torch, demucs |
+
+`center` is the one that always works: no model download, no GPU, no added
+latency, and it is the same trick karaoke amplifiers have used since the 90s --
+just with a 4th-order crossover so the low end survives and a level-compensated
+blend so turning the knob up does not make the backing quieter.
+
+`demucs` sounds better (keeps stereo, keeps drums, no anti-phase ghost) at the
+cost of one chunk of latency. It is the honest trade: a non-causal model cannot
+output anything until it has heard the samples after it.
+
+## Install
+
+```bash
+git clone https://github.com/<you>/karaoke-live && cd karaoke-live
+python3 -m venv .venv && .venv/bin/pip install -e .        # center/channel only
+.venv/bin/pip install -e '.[live,ml]'                     # + realtime audio, + demucs
+```
+
+macOS also needs `brew install ffmpeg portaudio`; Windows needs ffmpeg on PATH.
+
+## Use
+
+```bash
+# what devices exist?
+karaokelive devices
+
+# system audio -> your headphones, 70% vocal removal
+karaokelive live --capture "BlackHole 2ch" --output "MacBook Pro Speakers" --vocal-level 70
+
+# better quality, ~2.5 s behind
+karaokelive live --capture "BlackHole 2ch" --output "MacBook Pro Speakers" \
+    --engine demucs --vocal-level 100
+
+# offline: render an instrumental file
+karaokelive file song.mp3 song_karaoke.wav --vocal-level 100 --no-mono-guard
+
+# offline, best quality: real stems via the demucs CLI
+karaokelive prerender song.mp3 stems/
+```
+
+Stop with Ctrl-C.
+
+## Routing (the part everyone gets wrong)
+
+macOS: install [BlackHole](https://github.com/ExistentialAudio/BlackHole) 2ch
+(`brew install blackhole-2ch`), set the system output to it, then point
+`--capture` at it. Your browser goes silent because everything now flows
+through karaoke-live. To feed OBS at the same time, create a **Multi-Output
+Device** in Audio MIDI Setup (BlackHole + your interface) or let OBS capture the
+interface.
+
+Windows: install [VB-CABLE](https://vb-audio.com/Cable/), set *CABLE Input* as
+the default playback device, and use `--capture "CABLE Output"`. Add VB-CABLE
+A+B (`--capture "CABLE-A Output"`) if you need several independent cables.
+
+OBS: add an *Audio Output Capture* on the virtual cable you play into, or use
+*Audio Input Capture* if you route the processed audio back through an
+interface. Because the whole music path is delayed identically, the singer and
+the backing stay in sync -- what drifts is **video**, which is never told about
+the delay. Cover the video, or delay it in OBS by the same amount.
+
+## Things worth knowing before you trust it
+
+- **Mono downmix is the trap.** With `center` at 100%, left and right are
+  anti-phase and a mono sum cancels the music almost completely. Listeners on a
+  phone speaker or a single Bluetooth speaker would hear almost nothing. The
+  default caps removal at 85% (`--no-mono-guard` to override); on speakers or
+  headphones it is fine.
+- **Centre content goes too.** Kick, snare and bass sit in the middle like the
+  vocal does. That is why the crossover exists (`--bass-hz`, default 140 Hz) --
+  everything below it is added back.
+- **Multiplex sources are free wins.** If the vocal is only on one channel, use
+  `--engine channel` and skip the DSP entirely.
+- **The singer hears more ghost than the audience.** On headphones, the
+  residual anti-phase vocal is obvious to you and invisible to anyone listening
+  on speakers. If it bothers you, that is what `demucs` is for.
+- **Licence of the weights is not the licence of the code.** Demucs code is
+  MIT; its pretrained weights are not covered by that licence and part of its
+  training data is undocumented. Fine for personal use, a question mark for
+  redistribution. This repo never ships weights -- `demucs` downloads them.
+
+## Status
+
+- `center` and `channel`: covered by tests, verified end to end on real files
+  (a centred 440 Hz tone drops 33.8 dB while panned content moves < 0.1 dB).
+- `demucs`: the chunking, crossfade and latency bookkeeping are tested against a
+  stubbed separator (bit-exact pass-through, alignment verified by lag search);
+  the model call itself has not been run on this machine -- no torch here. Treat
+  it as the experimental path.
+- Live mode needs a real audio device; it is developed on a headless box, so the
+  routing path is the least-exercised part. `devices` first, then a 10 s
+  `--seconds 10` run, is the sane first test.
+
+## Attribution
+
+Standing on [Poise Voice Isolator](https://github.com/chabandou/poise-voice-isolator)
+(MIT) for the shape of the problem -- it plugs a model into the system audio
+graph and solves the opposite direction (keep speech, drop everything else).
+[Demucs](https://github.com/facebookresearch/demucs) does the heavy lifting for
+the ML engine, [BlackHole](https://github.com/ExistentialAudio/BlackHole) and
+[VB-CABLE](https://vb-audio.com/Cable/) do the routing.
+
+MIT licensed.
