@@ -104,7 +104,7 @@ select:disabled{opacity:.55; cursor:not-allowed}
 .seg button:active{transform:scale(.98)}
 .seg button[aria-pressed="true"]{background:var(--accent); color:var(--on-accent); border-color:var(--accent)}
 .seg button:disabled{opacity:.55; cursor:not-allowed}
-.vocal-wrap{display:flex; align-items:center; gap:16px}
+.vocal-wrap{display:flex; align-items:center; gap:16px; min-width:0; max-width:100%}
 .ring{position:relative; width:132px; height:132px; flex:none}
 .ring svg{transform:rotate(-90deg)}
 .ring .pct{
@@ -112,9 +112,11 @@ select:disabled{opacity:.55; cursor:not-allowed}
   align-items:center; justify-content:center; line-height:1.2;
   font-size:2rem; font-weight:700; font-variant-numeric:tabular-nums;
 }
-.ring .pct .remain{font-size:.75rem; font-weight:600; color:var(--fg-70); margin-top:2px}
+.ring-col{display:flex; flex-direction:column; align-items:center; gap:6px; flex:none; max-width:100%}
+.remain{font-size:.78rem; font-weight:600; color:var(--fg-70); white-space:nowrap; text-align:center;
+  font-variant-numeric:tabular-nums; letter-spacing:.01em}
 .vocal-ctl{flex:1; min-width:0}
-input[type="range"]{width:100%; min-height:44px; accent-color:var(--accent); cursor:pointer}
+input[type="range"]{width:100%; max-width:100%; min-height:44px; margin:0; accent-color:var(--accent); cursor:pointer}
 .sub-head{display:flex; align-items:center; gap:8px; margin:16px 0 12px; font-size:1rem; font-weight:600; color:var(--fg)}
 .sub-head svg{flex:none; color:var(--muted-fg)}
 .sub-head .en{font-size:.75rem; font-weight:400; color:var(--fg-70)}
@@ -192,10 +194,15 @@ input[type="range"]{width:100%; min-height:44px; accent-color:var(--accent); cur
 #error.show{display:block}
 footer{padding:6px 20px 10px; color:var(--fg-70); font-size:.72rem; text-align:center; flex:none}
 .key-card{justify-content:space-between}
-@media (max-width:759px){
+@media (max-width:819px){
   body{height:auto; overflow:auto}
   main{grid-template-columns:1fr; overflow:visible}
   .key-big{font-size:2.4rem}
+  .vocal-wrap{flex-wrap:wrap; justify-content:center}
+}
+@media (max-width:430px){
+  header{flex-wrap:wrap; row-gap:8px}
+  .vocal-wrap{gap:12px}
 }
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{transition:none !important; animation:none !important}
@@ -257,6 +264,7 @@ footer{padding:6px 20px 10px; color:var(--fg-70); font-size:.72rem; text-align:c
       <h2 id="h-mix">ระดับการตัดเสียงร้อง <span class="en" lang="en">(vocal cut)</span></h2>
     </div>
     <div class="vocal-wrap">
+      <div class="ring-col">
       <div class="ring" aria-hidden="true">
         <svg width="132" height="132" viewBox="0 0 132 132">
           <circle cx="66" cy="66" r="56" fill="none" stroke="#272F42" stroke-width="16"/>
@@ -266,7 +274,9 @@ footer{padding:6px 20px 10px; color:var(--fg-70); font-size:.72rem; text-align:c
             <title>85% mono-guard default</title>
           </line>
         </svg>
-        <div class="pct"><span><span id="vocalPct">85</span><span style="font-size:1rem">%</span></span><span class="remain">เหลือเสียงร้อง <span id="vocalRemain">15</span>%</span></div>
+        <div class="pct"><span><span id="vocalPct">85</span><span style="font-size:1rem">%</span></span></div>
+      </div>
+      <div class="remain">เหลือเสียงร้อง <span id="vocalRemain">15</span>%</div>
       </div>
       <div class="vocal-ctl">
         <label for="vocal">ระดับการตัดเสียงร้อง (%)</label>
