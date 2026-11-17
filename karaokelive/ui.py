@@ -40,7 +40,8 @@ import numpy as np
 
 from . import realtime
 from .engines import ENGINES, create_engine
-from .keydetect import RollingKeyDetector
+from .keydetect import RollingKeyDetector, estimate_chord
+from .tempo import RollingTempoDetector
 
 SAMPLE_RATE = 48000
 BLOCKSIZE = 512
@@ -58,6 +59,9 @@ _DEMO_KEYS = (
     ("F", "major", "7B"),
     ("E", "minor", "9A"),
 )
+
+#: Chords cycled through in demo mode: A minor's diatonic set.
+_DEMO_CHORDS = ("Am", "F", "C", "G")
 
 
 def _db(block: np.ndarray) -> float:
@@ -98,6 +102,8 @@ class ControlPanel:
             "demo": self.demo,
             "meters": {"in_db": MIN_DB, "out_db": MIN_DB},
             "key": _empty_key(),
+            "tempo": None,
+            "chord": None,
             "devices": [],
         }
         try:
@@ -117,10 +123,12 @@ class ControlPanel:
         """A JSON-serialisable copy of the state dict."""
         with self._lock:
             st = self._state
+            tempo = st["tempo"]
             return {
                 **st,
                 "meters": dict(st["meters"]),
                 "key": dict(st["key"]),
+                "tempo": dict(tempo) if tempo is not None else None,
                 "devices": list(st["devices"]),
             }
 
@@ -143,6 +151,17 @@ class ControlPanel:
                 "chroma": [float(v) for v in result.chroma],
                 "updated_at": time.time(),
             }
+
+    def _set_tempo_result(self, result) -> None:
+        with self._lock:
+            self._state["tempo"] = {
+                "bpm": float(result.bpm),
+                "confidence": float(result.confidence),
+            }
+
+    def _set_chord(self, chord: str) -> None:
+        with self._lock:
+            self._state["chord"] = chord
 
     def _is_running(self) -> bool:
         with self._lock:
@@ -170,6 +189,11 @@ class ControlPanel:
         if self._index_html is None:
             self._index_html = (WEB_DIR / "index.html").read_bytes()
         return self._index_html
+
+    def overlay_html(self) -> bytes:
+        if not hasattr(self, "_overlay_html") or self._overlay_html is None:
+            self._overlay_html = (WEB_DIR / "overlay.html").read_bytes()  # type: ignore[attr-defined]
+        return self._overlay_html  # type: ignore[attr-defined]
 
     # -- API -----------------------------------------------------------
     def api_config(self, body: dict) -> tuple[int, dict]:
@@ -217,8 +241,11 @@ class ControlPanel:
     def snapshot_locked(self) -> dict:
         """Copy of state; caller must hold the lock (see `api_config`)."""
         st = self._state
+        tempo = st["tempo"]
         return {**st, "meters": dict(st["meters"]),
-                "key": dict(st["key"]), "devices": list(st["devices"])}
+                "key": dict(st["key"]),
+                "tempo": dict(tempo) if tempo is not None else None,
+                "devices": list(st["devices"])}
 
     def api_start(self) -> tuple[int, dict]:
         """Start processing; 400 (Thai) when no device can be resolved."""
@@ -255,6 +282,8 @@ class ControlPanel:
                 "error": None,
                 "meters": {"in_db": MIN_DB, "out_db": MIN_DB},
                 "key": _empty_key(),
+                "tempo": None,
+                "chord": None,
                 "latency_ms": BLOCKSIZE / SAMPLE_RATE * 1000.0,
             })
         self._stop_event.clear()
@@ -319,6 +348,7 @@ class ControlPanel:
         self._set(latency_ms=(engine.latency_frames + BLOCKSIZE)
                   / SAMPLE_RATE * 1000.0)
         detector = RollingKeyDetector(SAMPLE_RATE)
+        tempo_detector = RollingTempoDetector(SAMPLE_RATE)
         pending: collections.deque = collections.deque()  # input blocks
         if engine.latency_frames == 0:
             def callback(indata, outdata, frames, _time_info, _status):
@@ -338,7 +368,7 @@ class ControlPanel:
             with sd.Stream(samplerate=SAMPLE_RATE, blocksize=BLOCKSIZE,
                            device=(self._in_dev, self._out_dev), channels=2,
                            dtype="float32", latency="low", callback=callback):
-                self._drain_loop(detector, pending)
+                self._drain_loop(detector, tempo_detector, pending)
             return
 
         # Engines with lookahead (demucs): rings + engine worker, mirroring
@@ -376,20 +406,29 @@ class ControlPanel:
                            device=(self._in_dev, self._out_dev), channels=2,
                            dtype="float32", latency="high",
                            callback=threaded_callback):
-                self._drain_loop(detector, pending)
+                self._drain_loop(detector, tempo_detector, pending)
         finally:
             stop.set()
             worker.join(timeout=5)
 
     def _drain_loop(self, detector: RollingKeyDetector,
+                    tempo_detector: RollingTempoDetector,
                     pending: collections.deque) -> None:
-        """Feed queued input blocks to the key detector until stopped."""
+        """Feed queued input blocks to the key/tempo detectors until stopped."""
         while self._is_running() and not self._stop_event.is_set():
             try:
                 while True:
-                    result = detector.feed(pending.popleft())
+                    block = pending.popleft()
+                    result = detector.feed(block)
                     if result is not None:
                         self._set_key_result(result)
+                    tempo = tempo_detector.feed(block)
+                    if tempo is not None:
+                        self._set_tempo_result(tempo)
+                    try:
+                        self._set_chord(estimate_chord(block, SAMPLE_RATE))
+                    except Exception:
+                        pass
             except IndexError:
                 pass
             time.sleep(0.05)
@@ -397,8 +436,12 @@ class ControlPanel:
     def _demo_loop(self) -> None:
         """Synthesise meters + rotating keys; no audio device needed."""
         index = 0
+        chord_index = 0
+        bpm = 120.0
         self._set_demo_key(index, 0.82)
+        self._set_demo_tempo_chord(bpm, _DEMO_CHORDS[chord_index])
         next_switch = time.time() + 8.0
+        next_chord = time.time() + 2.0
         in_db, out_db = -24.0, -26.0
         while self._is_running() and not self._stop_event.is_set():
             now = time.time()
@@ -406,10 +449,24 @@ class ControlPanel:
                 index = (index + 1) % len(_DEMO_KEYS)
                 self._set_demo_key(index, 0.6 + 0.35 * random.random())
                 next_switch = now + 8.0
+            if now >= next_chord:
+                chord_index = (chord_index + 1) % len(_DEMO_CHORDS)
+                bpm = min(128.0, max(118.0,
+                                     bpm + random.uniform(-2.0, 2.0)))
+                self._set_demo_tempo_chord(bpm, _DEMO_CHORDS[chord_index])
+                next_chord = now + 2.0
             in_db = min(-6.0, max(-45.0, in_db + random.uniform(-2.5, 2.5)))
             out_db = min(-6.0, max(-45.0, out_db + random.uniform(-2.5, 2.5)))
             self._set_meters(in_db, out_db)
             time.sleep(0.1)
+
+    def _set_demo_tempo_chord(self, bpm: float, chord: str) -> None:
+        with self._lock:
+            self._state["tempo"] = {
+                "bpm": float(bpm),
+                "confidence": 0.8,
+            }
+            self._state["chord"] = chord
 
     def _set_demo_key(self, index: int, confidence: float) -> None:
         from .keydetect import NOTE_NAMES
@@ -536,6 +593,20 @@ class _PanelHandler(BaseHTTPRequestHandler):
                 self.wfile.write(page)
             except (BrokenPipeError, ConnectionResetError):
                 pass  # tab closed while the page was in flight
+        elif path == "/overlay":
+            try:
+                page = panel.overlay_html()
+            except FileNotFoundError:
+                self._json(500, {"error": "ไม่พบไฟล์โอเวอร์เลย์ (web/overlay.html)"})
+                return
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(page)))
+                self.end_headers()
+                self.wfile.write(page)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # tab closed while the page was in flight
         elif path == "/api/state":
             self._json(200, panel.snapshot())
         elif path == "/api/devices":
@@ -575,6 +646,8 @@ class _PanelHandler(BaseHTTPRequestHandler):
                 payload = {
                     "meters": st["meters"],
                     "key": st["key"],
+                    "tempo": st["tempo"],
+                    "chord": st["chord"],
                     "running": st["running"],
                     "error": st["error"],
                     "latency_ms": st["latency_ms"],

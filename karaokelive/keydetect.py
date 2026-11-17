@@ -143,6 +143,32 @@ def detect_key(samples: np.ndarray, sample_rate: int) -> KeyResult:
     )
 
 
+def estimate_chord(samples: np.ndarray, sample_rate: int) -> str:
+    """Estimate the current triad from `samples` (mono or stereo float audio).
+
+    Each of the 24 fixed templates (12 major, 12 minor triads) is
+    scored by the summed chroma energy on its root/third/fifth; the
+    highest score wins. Major triads are labelled ``C``, ``F`` ...
+    and minor triads ``Am``, ``C#m`` ... Returns ``"?"`` when the
+    chroma is too flat to call, i.e. the margin between the best and
+    second-best scores is below 0.02.
+    """
+    chroma = _chroma(_to_mono(samples), sample_rate)
+    scored: list[tuple[float, str]] = []
+    for tonic in range(12):
+        name = NOTE_NAMES[tonic]
+        for minor in (False, True):
+            third = (tonic + (3 if minor else 4)) % 12
+            triad = (tonic, third, (tonic + 7) % 12)
+            score = float(chroma[list(triad)].sum())
+            label = name + ("m" if minor else "")
+            scored.append((score, label))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    if scored[0][0] - scored[1][0] < 0.02:
+        return "?"
+    return scored[0][1]
+
+
 class RollingKeyDetector:
     """Live key estimate over a sliding window of recent audio.
 

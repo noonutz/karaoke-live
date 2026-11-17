@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>karaoke-live — overlay</title>
+<style>
+html,body{background:transparent;margin:0}
+body{
+  margin:0; color:#fff;
+  font-family:system-ui,-apple-system,"Segoe UI","Noto Sans Thai",sans-serif;
+  font-size:22px; line-height:1.4;
+}
+.strip{
+  display:inline-flex; align-items:baseline; gap:.6em;
+  margin:12px; padding:.35em .8em; border-radius:.6em;
+  background:rgba(15,23,42,.72); backdrop-filter:blur(6px);
+  color:#fff; white-space:nowrap;
+  text-shadow:0 1px 2px rgba(0,0,0,.9),0 0 8px rgba(0,0,0,.7);
+}
+.key{font-size:40px; font-weight:800}
+.camelot{
+  font-size:22px; font-weight:700;
+  border:2px solid #fff; border-radius:.4em; padding:0 .45em;
+}
+.bpm,.chord{font-size:22px; font-weight:700}
+.chord-label{font-size:16px; font-weight:600; opacity:.85; margin-right:7px; letter-spacing:.02em}
+.age{font-size:20px; font-weight:600; opacity:.85; white-space:nowrap}
+.fade .anim{transition:opacity .25s ease}
+.fade .anim.swap{opacity:0}
+@media (prefers-reduced-motion:reduce){
+  .fade .anim{transition:none}
+}
+</style>
+</head>
+<body>
+<div class="strip fade" id="strip">
+  <span class="anim" id="label" hidden></span>
+  <span class="anim key" id="key">—</span>
+  <span class="anim camelot" id="camelot">—</span>
+  <span class="anim bpm" id="bpm">— BPM</span>
+  <span class="anim chord" id="chord"><span class="chord-label">คอร์ด:</span>—</span>
+  <span class="age" id="age">อัปเดตล่าสุด —</span>
+</div>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const els = {
+  strip: $("strip"), label: $("label"), key: $("key"),
+  camelot: $("camelot"), bpm: $("bpm"), chord: $("chord"), age: $("age"),
+};
+const q = new URLSearchParams(location.search);
+const scale = parseFloat(q.get("scale"));
+if (Number.isFinite(scale) && scale > 0 && scale <= 4) {
+  document.body.style.fontSize = (22 * scale) + "px";
+  els.key.style.fontSize = (40 * scale) + "px";
+  ["camelot", "bpm", "chord", "age"].forEach((k) => {
+    els[k].style.fontSize = (22 * scale) + "px";
+  });
+}
+const label = q.get("label");
+if (label) { els.label.textContent = label; els.label.hidden = false; }
+const simple = q.get("simple") === "1";
+if (simple) { els.bpm.hidden = true; els.chord.hidden = true; }
+const REDUCED = window.matchMedia
+  && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+let keyUpdatedAt = null, lastKey = "";
+function setText(el, text) { if (el.textContent !== text) el.textContent = text; }
+function paintKey(k) {
+  const name = (k && k.key) ? k.key + " " + (k.mode || "") : "—";
+  if (name !== lastKey && !REDUCED) {
+    lastKey = name;
+    els.strip.classList.add("swap");
+    setTimeout(() => {
+      setText(els.key, name);
+      els.strip.classList.remove("swap");
+    }, 130);
+  } else {
+    lastKey = name;
+    setText(els.key, name);
+  }
+  setText(els.camelot, (k && k.camelot) || "—");
+  keyUpdatedAt = (k && typeof k.updated_at === "number")
+    ? k.updated_at * 1000 : null;
+  if (keyUpdatedAt === null) setText(els.age, "อัปเดตล่าสุด —");
+}
+function paintTempo(t) {
+  setText(els.bpm, (t && typeof t.bpm === "number")
+    ? Math.round(t.bpm) + " BPM" : "— BPM");
+}
+function paintChord(c) {
+  if (typeof c === "string" && c && c !== "?") {
+    els.chord.innerHTML = '<span class="chord-label">คอร์ด:</span>' + c;
+  } else {
+    els.chord.innerHTML = '<span class="chord-label">คอร์ด:</span>—';
+  }
+}
+function tickAge() {
+  if (!keyUpdatedAt) { setText(els.age, "อัปเดตล่าสุด —"); return; }
+  const s = Math.max(0, Math.round((Date.now() - keyUpdatedAt) / 1000));
+  setText(els.age, "อัปเดตล่าสุด " + (s < 5 ? "เมื่อสักครู่"
+    : s < 60 ? s + " วินาทีที่แล้ว" : Math.floor(s / 60) + " นาทีที่แล้ว"));
+}
+setInterval(tickAge, 1000);
+let es = null, esRetry = null;
+function connectEvents() {
+  if (es) { try { es.close(); } catch (_) {} es = null; }
+  es = new EventSource("/api/events");
+  es.onmessage = (ev) => {
+    let d = null;
+    try { d = JSON.parse(ev.data); } catch (_) { return; }
+    if (!d || typeof d !== "object") return;
+    if ("key" in d) paintKey(d.key);
+    if ("tempo" in d) paintTempo(d.tempo);
+    if ("chord" in d) paintChord(d.chord);
+  };
+  es.onerror = () => {
+    try { es.close(); } catch (_) {}
+    es = null;
+    clearTimeout(esRetry);
+    esRetry = setTimeout(connectEvents, 2000);
+  };
+}
+connectEvents();
+</script>
+</body>
+</html>
