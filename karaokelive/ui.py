@@ -494,11 +494,16 @@ class _PanelHandler(BaseHTTPRequestHandler):
     # -- helpers ------------------------------------------------------
     def _json(self, code: int, obj: dict) -> None:
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # the browser closed the tab or the SSE reader went away -- normal
+            # for a local control panel, and not worth a traceback in the log
+            pass
 
     def _read_json_body(self) -> tuple[int | None, dict]:
         length = int(self.headers.get("Content-Length") or 0)
@@ -523,11 +528,14 @@ class _PanelHandler(BaseHTTPRequestHandler):
             except FileNotFoundError:
                 self._json(500, {"error": "ไม่พบไฟล์หน้าเว็บ (web/index.html)"})
                 return
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(page)))
-            self.end_headers()
-            self.wfile.write(page)
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(page)))
+                self.end_headers()
+                self.wfile.write(page)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # tab closed while the page was in flight
         elif path == "/api/state":
             self._json(200, panel.snapshot())
         elif path == "/api/devices":
