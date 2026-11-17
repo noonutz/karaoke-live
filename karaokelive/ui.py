@@ -16,11 +16,21 @@ One `ControlPanel` owns a single processor pipeline and an HTTP server:
 Routes (all JSON is `application/json; charset=utf-8`):
 
 * `GET /`             -> the single-file UI in `karaokelive/web/index.html`
-* `GET /api/state`    -> the state dict (includes `demo`: bool)
+* `GET /api/state`    -> the state dict (includes `demo`: bool,
+  `queue`: list, `now_playing`: dict | None)
 * `POST /api/config`  -> partial config update; 409 while running
 * `POST /api/start` / `POST /api/stop` -> new state, or 400 + device list
 * `GET /api/devices`  -> `{"input": [...], "output": [...]}`
+* `GET /api/queue`    -> `{"items": [...]}` (the pre-render queue)
+* `POST /api/queue/add {"source", "title"?}` -> 200 `{"item": ...}`;
+  400 (Thai) on duplicate source or missing file
+* `POST /api/queue/remove {"id"}` -> 200 `{"items": [...]}`
+* `POST /api/queue/run` -> starts/reuses the PrerenderWorker, 200
+* `POST /api/queue/play {"id"}` -> file playback of a `ready` item:
+  409 (Thai) when not ready, 400 when something else is playing
+* `POST /api/queue/stop` -> stops file playback (`now_playing` -> null)
 * `GET /api/events`   -> Server-Sent Events, one frame every 500 ms
+  (payload also carries `now_playing` and `queue_count`)
 
 Anything else is a 404. Local only, so no CORS handling.
 """
@@ -29,6 +39,7 @@ from __future__ import annotations
 import collections
 import json
 import math
+import os
 import random
 import threading
 import time
@@ -38,9 +49,11 @@ from urllib.parse import urlsplit
 
 import numpy as np
 
-from . import realtime
+from . import audio_io, realtime
 from .engines import ENGINES, create_engine
 from .keydetect import RollingKeyDetector, estimate_chord
+from .prerender import PrerenderWorker
+from .setlist import Setlist, default_state_dir
 from .tempo import RollingTempoDetector
 
 SAMPLE_RATE = 48000
@@ -80,11 +93,143 @@ def _empty_key() -> dict:
             "camelot": "", "updated_at": None}
 
 
+_QUEUE_STATUS_TH = {
+    "pending": "รอคิว",
+    "rendering": "กำลังแยก",
+    "ready": "พร้อม",
+    "failed": "ผิดพลาด",
+}
+
+
+def _item_payload(item) -> dict:
+    """One queue row for `/api/queue` and `/api/state`."""
+    return {
+        "id": item.id,
+        "title": item.title,
+        "status": item.status,
+        "duration_s": item.duration_s,
+        "instrumental": item.instrumental,
+        "error": item.error,
+    }
+
+
+class FilePlayer:
+    """Plays one rendered instrumental file.
+
+    Real mode preloads the whole file with `audio_io.load` and serves an
+    `sd.OutputStream` callback from that array in a loop, so the stream can
+    never under-run. Demo mode never touches an audio device: a timer thread
+    just advances `position_s` and stops at the end. Device selection comes
+    from the panel's current `output`. Any failure is returned as an error
+    string so the panel can put it in `state["error"]` and stop playback.
+    """
+
+    def __init__(self, panel: "ControlPanel", item_id: str, title: str,
+                 path: str, duration_s: float, demo: bool, output: str):
+        self._panel = panel
+        self.item_id = item_id
+        self.title = title
+        self.path = path
+        self.duration_s = float(duration_s)
+        self._demo = demo
+        self._output = output
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._stream = None
+        self._data: np.ndarray | None = None
+        self._pos = 0
+
+    def start(self) -> str | None:
+        """Start playback; returns an error message, or `None` on success."""
+        if self._demo:
+            self._thread = threading.Thread(
+                target=self._demo_run, name="file-player", daemon=True)
+            self._thread.start()
+            return None
+        try:
+            data = audio_io.load(self.path, SAMPLE_RATE)
+        except Exception as exc:
+            return f"เปิดไฟล์เสียงไม่ได้ ({exc})"
+        if data.size == 0 or data.ndim != 2:
+            return "เปิดไฟล์เสียงไม่ได้ (ไฟล์เสียงไม่ถูกต้อง)"
+        try:
+            import sounddevice as sd
+        except Exception:
+            return "ไม่พบ sounddevice: ติดตั้งด้วย pip install sounddevice"
+        try:
+            dev = None
+            if self._output:
+                try:
+                    dev = realtime.find_device(self._output, want_input=False)
+                except (SystemExit, RuntimeError) as exc:
+                    return f"ไม่พบอุปกรณ์เล่นเสียงที่ระบุ ({exc})"
+            self._data = np.ascontiguousarray(data, dtype=np.float32)
+            self._stream = sd.OutputStream(
+                samplerate=SAMPLE_RATE, channels=2, dtype="float32",
+                device=dev, blocksize=BLOCKSIZE, latency="low",
+                callback=self._callback)
+            self._stream.start()
+        except Exception as exc:
+            self._stream = None
+            return f"เล่นเสียงไม่ได้ ({exc})"
+        return None
+
+    def stop(self) -> None:
+        """Stop playback and release the device/thread (safe when idle)."""
+        self._stop.set()
+        stream, self._stream = self._stream, None
+        if stream is not None:
+            try:
+                stream.stop()
+            except Exception:
+                pass
+            try:
+                stream.close()
+            except Exception:
+                pass
+        thread, self._thread = self._thread, None
+        if (thread is not None and thread.is_alive()
+                and thread is not threading.current_thread()):
+            thread.join(timeout=5)
+
+    # -- internals -----------------------------------------------------
+    def _callback(self, outdata, frames, _time_info, _status) -> None:
+        if self._stop.is_set() or self._data is None:
+            outdata.fill(0)
+            return
+        data = self._data
+        total = len(data)
+        idx = (self._pos + np.arange(frames)) % total
+        outdata[:] = data[idx]
+        self._pos = (self._pos + frames) % total
+        try:
+            self._panel._advance_playback(
+                frames / SAMPLE_RATE, loop=True,
+                item_id=self.item_id, block=np.asarray(outdata))
+        except Exception:
+            pass
+
+    def _demo_run(self) -> None:
+        step = 0.1
+        while not self._stop.is_set():
+            time.sleep(step)
+            if self._stop.is_set():
+                break
+            try:
+                ended = self._panel._advance_playback(
+                    step, loop=False, item_id=self.item_id)
+            except Exception:
+                break
+            if ended:
+                break
+
+
 class ControlPanel:
     """Owns one processor pipeline and the HTTP server in front of it."""
 
     def __init__(self, port: int = 8765, host: str = "127.0.0.1",
-                 demo: bool = False):
+                 demo: bool = False, setlist: Setlist | None = None,
+                 prerender: PrerenderWorker | None = None):
         self.host = host
         self.port = int(port)
         self.demo = bool(demo)
@@ -105,7 +250,14 @@ class ControlPanel:
             "tempo": None,
             "chord": None,
             "devices": [],
+            "queue": [],
+            "now_playing": None,
         }
+        self.setlist = (setlist if setlist is not None
+                        else Setlist(path=default_state_dir() / "setlist.json"))
+        self.prerender = prerender
+        self._player: FilePlayer | None = None
+        self._sync_queue()
         try:
             self._state["devices"] = realtime.list_devices()
         except Exception:
@@ -122,15 +274,16 @@ class ControlPanel:
     def snapshot(self) -> dict:
         """A JSON-serialisable copy of the state dict."""
         with self._lock:
-            st = self._state
-            tempo = st["tempo"]
-            return {
-                **st,
-                "meters": dict(st["meters"]),
-                "key": dict(st["key"]),
-                "tempo": dict(tempo) if tempo is not None else None,
-                "devices": list(st["devices"]),
-            }
+            return self.snapshot_locked()
+
+    def _sync_queue(self) -> None:
+        """Refresh `state["queue"]` from the setlist (caller need not hold)."""
+        try:
+            items = [_item_payload(item) for item in self.setlist.items()]
+        except Exception:
+            items = []
+        with self._lock:
+            self._state["queue"] = items
 
     def _set(self, **fields) -> None:
         with self._lock:
@@ -242,10 +395,13 @@ class ControlPanel:
         """Copy of state; caller must hold the lock (see `api_config`)."""
         st = self._state
         tempo = st["tempo"]
+        now = st.get("now_playing")
         return {**st, "meters": dict(st["meters"]),
                 "key": dict(st["key"]),
                 "tempo": dict(tempo) if tempo is not None else None,
-                "devices": list(st["devices"])}
+                "devices": list(st["devices"]),
+                "queue": [dict(item) for item in st.get("queue", [])],
+                "now_playing": dict(now) if now is not None else None}
 
     def api_start(self) -> tuple[int, dict]:
         """Start processing; 400 (Thai) when no device can be resolved."""
@@ -297,6 +453,160 @@ class ControlPanel:
     def api_stop(self) -> tuple[int, dict]:
         self.stop_audio()
         return 200, self.snapshot()
+
+    # -- queue ---------------------------------------------------------
+    def api_queue_add(self, body: dict) -> tuple[int, dict]:
+        """Queue `body["source"]`; 400 (Thai) on duplicates/missing files."""
+        source = str(body.get("source") or "").strip()
+        title = body.get("title")
+        title = str(title).strip() if title is not None else None
+        if not source:
+            return 400, {"error": "กรุณาระบุไฟล์เพลง (source)"}
+        try:
+            item = self.setlist.add(source, title=title or None)
+        except ValueError:
+            return 400, {"error": "เพลงนี้อยู่ในคิวแล้ว"}
+        self._sync_queue()
+        return 200, {"item": _item_payload(item)}
+
+    def api_queue_remove(self, body: dict) -> tuple[int, dict]:
+        """Drop one queue item; 400 (Thai) when the id is missing."""
+        item_id = str(body.get("id") or "").strip()
+        if not item_id:
+            return 400, {"error": "กรุณาระบุรหัสเพลง (id)"}
+        if item_id == self._now_playing_id():
+            self.api_queue_stop()
+        self.setlist.remove(item_id)
+        self._sync_queue()
+        return 200, {"items": [_item_payload(item)
+                               for item in self.setlist.items()]}
+
+    def api_queue_run(self) -> tuple[int, dict]:
+        """Start the pre-render worker (reused while it is alive)."""
+        worker = self.prerender
+        if worker is None or not worker.is_alive():
+            worker = PrerenderWorker(
+                self.setlist, str(default_state_dir() / "stems"), poll_s=1.0)
+            worker.start()
+            self.prerender = worker
+        return 200, {"started": True}
+
+    def api_queue_play(self, body: dict) -> tuple[int, dict]:
+        """Play a `ready` item's instrumental; live engine is bypassed.
+
+        Returns 404 when the id is unknown, 409 (Thai) when the item is not
+        ready yet or has failed, and 400 when something else is playing or
+        the stream cannot be opened.
+        """
+        item_id = str(body.get("id") or "").strip()
+        if not item_id:
+            return 400, {"error": "กรุณาระบุรหัสเพลง (id)"}
+        item = self.setlist.get(item_id)
+        if item is None:
+            return 404, {"error": "ไม่พบเพลงนี้ในคิว"}
+        if item.status == "failed":
+            return 409, {"error": f"แยกเสียงไม่สำเร็จ ({item.error or 'ดูรายละเอียดในคิว'})"}
+        if item.status != "ready" or not item.instrumental:
+            label = _QUEUE_STATUS_TH.get(item.status, item.status)
+            return 409, {"error": f"เพลงนี้ยังไม่พร้อม (สถานะ: {label})"}
+        with self._lock:
+            if self._state["now_playing"] is not None:
+                return 400, {"error": "กำลังเล่นเพลงอื่นอยู่ กรุณากดหยุดก่อน"}
+        if not os.path.exists(item.instrumental):
+            return 400, {"error": "ไม่พบไฟล์เสียงที่แยกไว้ กรุณารันแยกเสียงใหม่"}
+        try:
+            duration_s = float(item.duration_s) \
+                if item.duration_s else self._probe_duration(item.instrumental)
+        except Exception:
+            duration_s = 0.0
+        if not duration_s or duration_s <= 0:
+            return 400, {"error": "อ่านความยาวเพลงไม่ได้ กรุณาลองใหม่อีกครั้ง"}
+        with self._lock:
+            output = self._state["output"]
+        player = FilePlayer(self, item.id, item.title, item.instrumental,
+                            duration_s, self.demo, output)
+        # Switch to file playback first (the live engine is bypassed, so the
+        # vocal level drops to 0): the player thread only advances a
+        # `now_playing` row that already exists, so the state must be in
+        # place before `start()` lets the thread tick.
+        self.stop_audio()
+        with self._lock:
+            self._state.update({
+                "running": False,
+                "vocal_level": 0.0,
+                "error": None,
+                "now_playing": {"id": item.id, "title": item.title,
+                                "position_s": 0.0, "duration_s": duration_s},
+            })
+            self._player = player
+        error = player.start()
+        if error is not None:
+            try:
+                player.stop()
+            except Exception:
+                pass
+            with self._lock:
+                if self._player is player:
+                    self._player = None
+                self._state["now_playing"] = None
+                self._state["error"] = error
+            return 400, {"error": error}
+        return 200, self.snapshot()
+
+    def api_queue_stop(self) -> tuple[int, dict]:
+        """Stop file playback; `now_playing` becomes null."""
+        player, self._player = self._player, None
+        if player is not None:
+            try:
+                player.stop()
+            except Exception:
+                pass
+        with self._lock:
+            self._state["now_playing"] = None
+            self._state["meters"] = {"in_db": MIN_DB, "out_db": MIN_DB}
+        return 200, self.snapshot()
+
+    @staticmethod
+    def _probe_duration(path: str) -> float:
+        try:
+            return float(audio_io.probe(path).duration_s)
+        except Exception:
+            return 0.0
+
+    def _now_playing_id(self) -> str | None:
+        with self._lock:
+            now = self._state.get("now_playing")
+            return now.get("id") if isinstance(now, dict) else None
+
+    def _advance_playback(self, delta_s: float, loop: bool,
+                          item_id: str, block=None) -> bool:
+        """Advance `now_playing.position_s`; returns True when finished."""
+        with self._lock:
+            now = self._state.get("now_playing")
+            if now is None or now.get("id") != item_id:
+                return True  # superseded or stopped; let the player exit
+            duration = float(now.get("duration_s") or 0.0)
+            position = float(now.get("position_s") or 0.0) + float(delta_s)
+            if loop and duration > 0:
+                position %= duration
+            finished = duration > 0 and position >= duration
+            if finished:
+                position = duration
+            self._state["now_playing"] = {**now, "position_s": position}
+            if block is not None:
+                self._state["meters"] = {"in_db": MIN_DB,
+                                         "out_db": _db(np.asarray(block))}
+            ended = finished and not loop
+            if ended:
+                self._state["now_playing"] = None
+        if ended:
+            player, self._player = self._player, None
+            if player is not None:
+                try:
+                    player.stop()
+                except Exception:
+                    pass
+        return ended
 
     def stop_audio(self) -> None:
         """Signal the worker to stop and wait for it (safe when idle)."""
@@ -526,6 +836,17 @@ class ControlPanel:
 
     def shutdown(self) -> None:
         self.stop_audio()
+        try:
+            self.api_queue_stop()
+        except Exception:
+            pass
+        worker = self.prerender
+        self.prerender = None
+        if worker is not None and worker.is_alive():
+            try:
+                worker.stop(timeout=2)
+            except Exception:
+                pass
         server, self._server = self._server, None
         if server is not None:
             try:
@@ -611,6 +932,9 @@ class _PanelHandler(BaseHTTPRequestHandler):
             self._json(200, panel.snapshot())
         elif path == "/api/devices":
             self._json(200, panel.device_lists())
+        elif path == "/api/queue":
+            panel._sync_queue()
+            self._json(200, {"items": panel.snapshot()["queue"]})
         elif path == "/api/events":
             self._events(panel)
         else:
@@ -619,7 +943,9 @@ class _PanelHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         path = urlsplit(self.path).path
         panel: ControlPanel = self.server.panel  # type: ignore[attr-defined]
-        if path not in ("/api/config", "/api/start", "/api/stop"):
+        if path not in ("/api/config", "/api/start", "/api/stop",
+                        "/api/queue/add", "/api/queue/remove",
+                        "/api/queue/run", "/api/queue/play", "/api/queue/stop"):
             self._json(404, {"error": "ไม่พบเส้นทางนี้ (404)"})
             return
         fail, body = self._read_json_body()
@@ -630,8 +956,18 @@ class _PanelHandler(BaseHTTPRequestHandler):
             code, obj = panel.api_config(body)
         elif path == "/api/start":
             code, obj = panel.api_start()
-        else:
+        elif path == "/api/stop":
             code, obj = panel.api_stop()
+        elif path == "/api/queue/add":
+            code, obj = panel.api_queue_add(body)
+        elif path == "/api/queue/remove":
+            code, obj = panel.api_queue_remove(body)
+        elif path == "/api/queue/run":
+            code, obj = panel.api_queue_run()
+        elif path == "/api/queue/play":
+            code, obj = panel.api_queue_play(body)
+        else:
+            code, obj = panel.api_queue_stop()
         self._json(code, obj)
 
     def _events(self, panel: ControlPanel) -> None:
@@ -651,6 +987,8 @@ class _PanelHandler(BaseHTTPRequestHandler):
                     "running": st["running"],
                     "error": st["error"],
                     "latency_ms": st["latency_ms"],
+                    "now_playing": st.get("now_playing"),
+                    "queue_count": len(st.get("queue", [])),
                 }
                 frame = ("data: " + json.dumps(payload, ensure_ascii=False)
                          + "\n\n").encode("utf-8")

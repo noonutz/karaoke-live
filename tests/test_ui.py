@@ -6,10 +6,12 @@ from __future__ import annotations
 
 import json
 import re
+import tempfile
 import unittest
 import urllib.error
 import urllib.request
 
+from karaokelive.setlist import Setlist
 from karaokelive.ui import ControlPanel
 
 
@@ -38,7 +40,13 @@ def _post(base: str, path: str, body: dict):
 class PanelTests(unittest.TestCase):
     def setUp(self):
         # Ephemeral port; demo mode needs no audio device.
-        self.panel = ControlPanel(port=0, demo=True).start_in_background()
+        # Each test gets its own throwaway setlist file.
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.setlist = Setlist(
+            path=f"{self._tmp.name}/setlist.json")
+        self.panel = ControlPanel(port=0, demo=True,
+                                  setlist=self.setlist).start_in_background()
         self.base = f"http://127.0.0.1:{self.panel.bound_port}"
 
     def tearDown(self):
@@ -137,6 +145,81 @@ class PanelTests(unittest.TestCase):
             text = re.sub(r"<[^>]+>", "", inner).strip()
             labelled = bool(text) or "aria-label" in attrs.lower()
             self.assertTrue(labelled, f"button without label: {attrs!r}")
+
+    def _state(self):
+        status, _ctype, raw = _get(self.base, "/api/state")
+        self.assertEqual(status, 200)
+        return json.loads(raw.decode("utf-8"))
+
+    def test_queue_add_list_remove_roundtrip(self):
+        status, _ctype, raw = _get(self.base, "/api/queue")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw.decode("utf-8")), {"items": []})
+
+        status, body = _post(self.base, "/api/queue/add",
+                             {"source": "/music/one.mp3", "title": "หนึ่ง"})
+        self.assertEqual(status, 200)
+        item = body["item"]
+        self.assertEqual(item["title"], "หนึ่ง")
+        self.assertEqual(item["status"], "pending")
+
+        state = self._state()
+        self.assertEqual(len(state["queue"]), 1)
+        self.assertEqual(state["queue"][0]["id"], item["id"])
+
+        # Duplicate source is a 400 with a Thai message.
+        status, body = _post(self.base, "/api/queue/add",
+                             {"source": "/music/one.mp3"})
+        self.assertEqual(status, 400)
+        self.assertIn("error", body)
+        self.assertRegex(body["error"], r"[ก-๙]")
+
+        # Removing an unknown id still returns the remaining items.
+        status, body = _post(self.base, "/api/queue/remove",
+                             {"id": "deadbeef"})
+        self.assertEqual(status, 200)
+        self.assertEqual(len(body["items"]), 1)
+        status, body = _post(self.base, "/api/queue/remove",
+                             {"id": item["id"]})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["items"], [])
+
+        state = self._state()
+        self.assertEqual(state["queue"], [])
+
+    def test_queue_play_guards(self):
+        status, body = _post(self.base, "/api/queue/add",
+                             {"source": "/music/pending.mp3"})
+        self.assertEqual(status, 200)
+        pending_id = body["item"]["id"]
+
+        # Pending items cannot play: 409 + Thai message.
+        status, body = _post(self.base, "/api/queue/play",
+                             {"id": pending_id})
+        self.assertEqual(status, 409)
+        self.assertIn("error", body)
+        self.assertRegex(body["error"], r"[ก-๙]")
+
+        self.assertIsNone(self._state()["now_playing"])
+
+        # Stop is idempotent even when nothing plays.
+        status, body = _post(self.base, "/api/queue/stop", {})
+        self.assertEqual(status, 200)
+        self.assertIsNone(self._state()["now_playing"])
+
+    def test_queue_drawer_markup(self):
+        _status, ctype, raw = _get(self.base, "/")
+        self.assertIn("text/html", ctype)
+        html = raw.decode("utf-8")
+        self.assertIn('id="btnQueue"', html)
+        self.assertIn("คิวเพลง", html)
+        self.assertIn('id="queueDrawer"', html)
+        self.assertIn('role="dialog"', html)
+        self.assertIn('aria-modal="true"', html)
+        self.assertIn('id="queueScrim"', html)
+        self.assertIn("วาง path ไฟล์เสียง", html)
+        self.assertIn("แยกเสียงเพลงที่รอ", html)
+        self.assertIn("คิวเพลง (", html)
 
     def test_unknown_paths_404(self):
         try:

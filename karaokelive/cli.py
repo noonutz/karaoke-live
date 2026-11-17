@@ -205,6 +205,33 @@ def build_parser() -> argparse.ArgumentParser:
     p_ui.add_argument("--demo", action="store_true",
                       help="synthesize meters/key with no audio device")
     p_ui.set_defaults(func=cmd_ui)
+
+    p_queue = sub.add_parser("queue", help="pre-render queue of songs to separate")
+    qsub = p_queue.add_subparsers(dest="queue_command", required=True)
+
+    p_add = qsub.add_parser("add", help="add songs to the queue")
+    p_add.add_argument("source", nargs="+")
+    p_add.add_argument("--title", default=None)
+    p_add.set_defaults(func=cmd_queue_add)
+
+    qsub.add_parser("list", help="list queued songs").set_defaults(
+        func=cmd_queue_list)
+
+    p_remove = qsub.add_parser("remove", help="remove a song from the queue")
+    p_remove.add_argument("id")
+    p_remove.set_defaults(func=cmd_queue_remove)
+
+    p_clear = qsub.add_parser("clear", help="drop queued songs")
+    p_clear.add_argument("--status",
+                         choices=("pending", "rendering", "ready", "failed"),
+                         default=None,
+                         help="clear only this status (default: everything)")
+    p_clear.set_defaults(func=cmd_queue_clear)
+
+    p_run = qsub.add_parser("run", help="separate everything queued")
+    p_run.add_argument("--outdir", default=None)
+    p_run.add_argument("--model", default="htdemucs")
+    p_run.set_defaults(func=cmd_queue_run)
     return parser
 
 
@@ -220,6 +247,127 @@ def cmd_ui(args) -> int:
         print("\nหยุดแผงควบคุมแล้ว")
     finally:
         panel.shutdown()
+    return 0
+
+
+QUEUE_STATUS_TH = {
+    "pending": "รอคิว",
+    "rendering": "กำลังแยก",
+    "ready": "พร้อม",
+    "failed": "ผิดพลาด",
+}
+
+
+def _fmt_duration(seconds) -> str:
+    if seconds is None:
+        return "-"
+    try:
+        total = int(float(seconds))
+    except (TypeError, ValueError):
+        return "-"
+    if total < 0:
+        return "-"
+    return f"{total // 60}:{total % 60:02d}"
+
+
+def cmd_queue_add(args) -> int:
+    from .setlist import Setlist
+
+    if args.title is not None and len(args.source) > 1:
+        print("error: --title ใช้ได้เมื่อเพิ่มทีละไฟล์เท่านั้น",
+              file=sys.stderr)
+        return 2
+    sl = Setlist()
+    failed = 0
+    for source in args.source:
+        title = args.title if len(args.source) == 1 else None
+        try:
+            item = sl.add(source, title=title)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            failed = 1
+            continue
+        print(f"เพิ่มเข้าคิว: {item.title} ({item.id})")
+    return failed
+
+
+def cmd_queue_list(_args) -> int:
+    from .setlist import Setlist
+
+    items = Setlist().items()
+    if not items:
+        print("คิวว่าง")
+        return 0
+    for item in items:
+        status = QUEUE_STATUS_TH.get(item.status, item.status)
+        duration = _fmt_duration(item.duration_s)
+        print(f"[{status}] {item.title} ({item.id}) {duration}")
+    return 0
+
+
+def cmd_queue_remove(args) -> int:
+    from .setlist import Setlist
+
+    if Setlist().remove(args.id):
+        print(f"ลบออกจากคิว: {args.id}")
+        return 0
+    print(f"error: ไม่พบ {args.id} ในคิว", file=sys.stderr)
+    return 1
+
+
+def cmd_queue_clear(args) -> int:
+    from .setlist import Setlist
+
+    count = Setlist().clear(status=args.status)
+    print(f"ล้างคิวแล้ว ({count} รายการ)")
+    return 0
+
+
+def cmd_queue_run(args) -> int:
+    import time
+
+    from .prerender import PrerenderWorker, separate_file
+    from .setlist import Setlist, default_state_dir
+
+    sl = Setlist()
+    waiting = [item for item in sl.items()
+               if item.status in ("pending", "rendering")]
+    if not waiting:
+        print("คิวว่าง ไม่มีอะไรต้องแยก")
+        return 0
+    outdir = args.outdir or str(default_state_dir() / "stems")
+    model = args.model
+    worker = PrerenderWorker(
+        sl, outdir,
+        separator=lambda src, out: separate_file(src, out, model=model),
+        poll_s=1.0,
+    )
+    print(f"เริ่มแยกเสียง {len(waiting)} รายการ กด Ctrl-C เพื่อหยุด")
+    known = {item.id: item.status for item in sl.items()}
+    worker.start()
+    try:
+        while worker.is_alive():
+            time.sleep(0.5)
+            for item in sl.items():
+                if known.get(item.id) == item.status:
+                    continue
+                known[item.id] = item.status
+                if item.status == "rendering":
+                    print(f"กำลังแยก: {item.title} ({item.id})")
+                elif item.status == "ready":
+                    print(f"พร้อม: {item.title} -> {item.instrumental}")
+                elif item.status == "failed":
+                    print(f"ผิดพลาด: {item.title} ({item.error})")
+            if not any(item.status in ("pending", "rendering")
+                       for item in sl.items()):
+                print("เสร็จแล้ว")
+                break
+    except KeyboardInterrupt:
+        # The interrupt lands on this thread only; the worker is never marked
+        # failed because of it -- the current item runs to its real result.
+        print("\nหยุดแล้ว")
+    finally:
+        worker.stop()
     return 0
 
 
