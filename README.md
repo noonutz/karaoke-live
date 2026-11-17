@@ -1,5 +1,7 @@
 # karaoke-live
 
+**English** · [ไทย](README.th.md)
+
 Remove the lead vocal from whatever your computer is playing, live, and sing
 over it. Built for the case the existing tools miss: not "hear the voices in a
 movie", but "keep the music, drop the singer".
