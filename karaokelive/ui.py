@@ -53,6 +53,7 @@ from . import audio_io, realtime
 from .engines import ENGINES, create_engine
 from .keydetect import RollingKeyDetector, estimate_chord
 from .prerender import PrerenderWorker
+from .range import Profile, estimate_range, fit_song, midi_to_name
 from .setlist import Setlist, default_state_dir
 from .tempo import RollingTempoDetector
 
@@ -91,6 +92,95 @@ def _db(block: np.ndarray) -> float:
 def _empty_key() -> dict:
     return {"key": None, "mode": None, "confidence": 0.0,
             "camelot": "", "updated_at": None}
+
+
+def _profile_payload(profile: Profile | None = None) -> dict | None:
+    """Panel-friendly profile view, or `None` when unset."""
+    if profile is None:
+        try:
+            profile = Profile.load()
+        except Exception:
+            return None
+    if profile is None:
+        return None
+    return {"low": float(profile.low), "high": float(profile.high),
+            "notes": (f"{midi_to_name(profile.low)}-"
+                      f"{midi_to_name(profile.high)}")}
+
+
+def _demo_profile() -> Profile:
+    """Fixed demo profile (A2-C5) so the UI can be exercised headless."""
+    return Profile(low=45.0, high=72.0, updated_at=0.0)
+
+
+def _demo_range_fit() -> dict:
+    """Plausible demo pair: song A3-E5 against profile A2-C5 (too high)."""
+    profile = _demo_profile()
+    fit = fit_song(57.0, 76.0, profile)
+    return {"song_low": 57.0, "song_high": 76.0, "song_notes": "A3-E5",
+            "shift": int(fit.shift), "verdict": fit.verdict,
+            "message": fit.message, "approximate": False}
+
+
+def _range_fit_payload(song_low: float, song_high: float,
+                       profile: Profile | None = None) -> dict | None:
+    """Fit dict for the panel state, or `None` when no profile is set."""
+    if profile is None:
+        try:
+            profile = Profile.load()
+        except Exception:
+            return None
+    if profile is None:
+        return None
+    fit = fit_song(song_low, song_high, profile)
+    return {"song_low": float(song_low), "song_high": float(song_high),
+            "shift": int(fit.shift), "verdict": fit.verdict,
+            "message": fit.message}
+
+
+def estimate_song_range(item_id: str | None = None,
+                        setlist: Setlist | None = None,
+                        approximate: bool = False) -> dict | None:
+    """Estimate a song's range for the panel (vocal stem when available).
+
+    When `item_id` points at a queued item whose instrumental file exists,
+    the ``vocals.*`` sibling next to it is estimated; otherwise the
+    instrumental/mix at that path is used and the result is marked
+    approximate.
+    """
+    path: str | None = None
+    if item_id is not None and setlist is not None:
+        try:
+            item = setlist.get(item_id)
+        except Exception:
+            item = None
+        if item is not None and item.instrumental:
+            inst = Path(item.instrumental)
+            vocals: Path | None = None
+            for candidate in inst.parent.glob("vocals.*"):
+                vocals = candidate
+                break
+            if vocals is not None and vocals.is_file():
+                path = str(vocals)
+                approximate = False
+            elif inst.is_file():
+                path = str(inst)
+                approximate = True
+    if path is None:
+        return None
+    try:
+        data = audio_io.load(path, SAMPLE_RATE)
+        result = estimate_range(data, SAMPLE_RATE)
+    except ValueError:
+        return None
+    except Exception:
+        return None
+    payload = _range_fit_payload(result.low_midi, result.high_midi)
+    if payload is None:
+        return None
+    payload["song_notes"] = result.notes
+    payload["approximate"] = bool(approximate)
+    return payload
 
 
 _QUEUE_STATUS_TH = {
@@ -252,6 +342,9 @@ class ControlPanel:
             "devices": [],
             "queue": [],
             "now_playing": None,
+            "range_fit": _demo_range_fit() if self.demo else None,
+            "profile": (_profile_payload(_demo_profile())
+                        if self.demo else _profile_payload()),
         }
         self.setlist = (setlist if setlist is not None
                         else Setlist(path=default_state_dir() / "setlist.json"))
@@ -396,12 +489,21 @@ class ControlPanel:
         st = self._state
         tempo = st["tempo"]
         now = st.get("now_playing")
+        if not st.get("demo"):
+            # Pick up profiles saved by `karaokelive range` while running.
+            st["profile"] = _profile_payload()
+        range_fit = st.get("range_fit")
+        profile = st.get("profile")
         return {**st, "meters": dict(st["meters"]),
                 "key": dict(st["key"]),
                 "tempo": dict(tempo) if tempo is not None else None,
                 "devices": list(st["devices"]),
                 "queue": [dict(item) for item in st.get("queue", [])],
-                "now_playing": dict(now) if now is not None else None}
+                "now_playing": dict(now) if now is not None else None,
+                "range_fit": (dict(range_fit)
+                              if isinstance(range_fit, dict) else None),
+                "profile": (dict(profile)
+                            if isinstance(profile, dict) else None)}
 
     def api_start(self) -> tuple[int, dict]:
         """Start processing; 400 (Thai) when no device can be resolved."""
@@ -530,6 +632,15 @@ class ControlPanel:
         # `now_playing` row that already exists, so the state must be in
         # place before `start()` lets the thread tick.
         self.stop_audio()
+        if not self.demo:
+            # Prefer the vocal stem; fall back to the mix (approximate) --
+            # never let range estimation break queue playback.
+            try:
+                range_fit = estimate_song_range(item.id, self.setlist)
+            except Exception:
+                range_fit = None
+        else:
+            range_fit = _demo_range_fit()
         with self._lock:
             self._state.update({
                 "running": False,
@@ -537,6 +648,7 @@ class ControlPanel:
                 "error": None,
                 "now_playing": {"id": item.id, "title": item.title,
                                 "position_s": 0.0, "duration_s": duration_s},
+                "range_fit": range_fit,
             })
             self._player = player
         error = player.start()
@@ -721,10 +833,20 @@ class ControlPanel:
             stop.set()
             worker.join(timeout=5)
 
+    def _set_range_fit(self, payload: dict | None) -> None:
+        with self._lock:
+            self._state["range_fit"] = payload
+
     def _drain_loop(self, detector: RollingKeyDetector,
                     tempo_detector: RollingTempoDetector,
                     pending: collections.deque) -> None:
         """Feed queued input blocks to the key/tempo detectors until stopped."""
+        mix: collections.deque = collections.deque()
+        mixed = 0
+        since_mix = 0
+        need = 8 * SAMPLE_RATE
+        every = 4 * SAMPLE_RATE
+        window = 8 * SAMPLE_RATE
         while self._is_running() and not self._stop_event.is_set():
             try:
                 while True:
@@ -739,8 +861,36 @@ class ControlPanel:
                         self._set_chord(estimate_chord(block, SAMPLE_RATE))
                     except Exception:
                         pass
+                    try:
+                        mono = np.asarray(block, dtype=np.float32)
+                        if mono.ndim == 2:
+                            mono = mono.mean(axis=1)
+                        mono = mono.reshape(-1)
+                    except Exception:
+                        mono = None
+                    if mono is not None and mono.size:
+                        mix.append(mono.copy())
+                        mixed += len(mono)
+                        since_mix += len(mono)
+                        while mix and mixed - len(mix[0]) >= window:
+                            mixed -= len(mix.popleft())
             except IndexError:
                 pass
+            if mixed >= need and since_mix >= every:
+                since_mix = 0
+                try:
+                    audio = np.concatenate(list(mix))[-window:]
+                    song = estimate_range(audio, SAMPLE_RATE)
+                    payload = _range_fit_payload(song.low_midi,
+                                                 song.high_midi)
+                    if payload is not None:
+                        payload["song_notes"] = song.notes
+                        payload["approximate"] = True
+                        self._set_range_fit(payload)
+                except ValueError:
+                    pass
+                except Exception:
+                    pass
             time.sleep(0.05)
 
     def _demo_loop(self) -> None:
@@ -989,6 +1139,8 @@ class _PanelHandler(BaseHTTPRequestHandler):
                     "latency_ms": st["latency_ms"],
                     "now_playing": st.get("now_playing"),
                     "queue_count": len(st.get("queue", [])),
+                    "range_fit": st.get("range_fit"),
+                    "profile": st.get("profile"),
                 }
                 frame = ("data: " + json.dumps(payload, ensure_ascii=False)
                          + "\n\n").encode("utf-8")

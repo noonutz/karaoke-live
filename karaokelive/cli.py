@@ -12,6 +12,7 @@ import numpy as np
 from . import audio_io
 from .engines import ENGINES, create_engine
 from .keydetect import NOTE_NAMES, detect_key
+from .range import Profile, estimate_range, fit_song, midi_to_name, name_to_midi
 from .realtime import LiveRouter, format_devices, list_devices
 
 DEFAULT_SR = 48000
@@ -119,7 +120,104 @@ def cmd_key(args) -> int:
     if result.confidence < 0.5:
         print("หมายเหตุ: ข้อมูลเสียงยังน้อย major/minor อาจสลับกันได้")
     print(_chroma_bar(result.chroma))
+    profile = Profile.load()
+    if profile is not None:
+        try:
+            song = estimate_range(data, sample_rate)
+        except ValueError:
+            print("ประเมินช่วงเสียงเพลงไม่ได้ (เสียงร้องน้อยเกินไป)")
+        else:
+            fit = fit_song(song.low_midi, song.high_midi, profile)
+            print(f"ช่วงเสียงเพลง: {song.notes} "
+                  f"(กว้าง {song.semitones():.1f} semitone) — {fit.message}")
     return 0
+
+
+def _parse_range_arg(text: str) -> tuple[float, float]:
+    """Parse ``LOW:HIGH`` note names (``A2:C5``) into MIDI, low first."""
+    parts = str(text).split(":")
+    if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
+        raise argparse.ArgumentTypeError(
+            'รูปแบบช่วงเสียงต้องเป็น "LOW:HIGH" เช่น A2:C5')
+    try:
+        low = name_to_midi(parts[0].strip())
+        high = name_to_midi(parts[1].strip())
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+    return (min(low, high), max(low, high))
+
+
+def cmd_range(args) -> int:
+    """Manage the singer's vocal-range profile."""
+    if args.set is not None:
+        low, high = _parse_range_arg(args.set)
+        Profile(low=low, high=high).save()
+        print(f"บันทึกช่วงเสียง: {midi_to_name(low)}-{midi_to_name(high)} "
+              f"(กว้าง {high - low:.0f} semitone)")
+        return 0
+    if args.show:
+        profile = Profile.load()
+        if profile is None:
+            print("ยังไม่ได้ตั้งช่วงเสียง (karaokelive range --set \"A2:C5\")")
+            return 0
+        print(f"ช่วงเสียงของคุณ: {midi_to_name(profile.low)}-"
+              f"{midi_to_name(profile.high)} "
+              f"(กว้าง {profile.high - profile.low:.0f} semitone)")
+        return 0
+    if args.from_file is not None:
+        info = audio_io.probe(args.from_file)
+        sample_rate = info.sample_rate or DEFAULT_SR
+        data = audio_io.load(args.from_file, sample_rate)
+        try:
+            song = estimate_range(data, sample_rate)
+        except ValueError:
+            print("ประเมินช่วงเสียงไม่ได้: เสียงร้องน้อยเกินไป "
+                  "(voiced ต่ำกว่า 5%) — ลองไฟล์ที่มีเสียงร้องชัดกว่านี้",
+                  file=sys.stderr)
+            return 1
+        Profile(low=song.low_midi, high=song.high_midi).save()
+        print(f"บันทึกช่วงเสียง: {song.notes} "
+              f"(กว้าง {song.semitones():.1f} semitone, "
+              f"voiced {song.voiced_ratio * 100:.0f}%)")
+        return 0
+    if args.record is not None:
+        seconds = float(args.record)
+        if seconds <= 0:
+            print("error: ระยะเวลาอัดเสียงต้องมากกว่า 0 วินาที",
+                  file=sys.stderr)
+            return 2
+        try:
+            import sounddevice as sd
+        except Exception:
+            print("อัดเสียงไม่ได้: ไม่พบ sounddevice — "
+                  "ใช้ karaokelive range --from-file <audio> แทน",
+                  file=sys.stderr)
+            return 1
+        try:
+            frames = int(seconds * DEFAULT_SR)
+            print(f"กำลังอัดเสียง {seconds:.0f} วินาที... ร้องได้เลย")
+            rec = sd.rec(frames, samplerate=DEFAULT_SR, channels=1,
+                         dtype="float32", blocking=True)
+        except Exception:
+            print("อัดเสียงไม่ได้: ไม่มีอุปกรณ์รับเสียง — "
+                  "ใช้ karaokelive range --from-file <audio> แทน",
+                  file=sys.stderr)
+            return 1
+        try:
+            song = estimate_range(np.asarray(rec).reshape(-1), DEFAULT_SR)
+        except ValueError:
+            print("ประเมินช่วงเสียงไม่ได้: เสียงร้องน้อยเกินไป "
+                  "(voiced ต่ำกว่า 5%) — ลองไฟล์ที่มีเสียงร้องชัดกว่านี้",
+                  file=sys.stderr)
+            return 1
+        Profile(low=song.low_midi, high=song.high_midi).save()
+        print(f"บันทึกช่วงเสียง: {song.notes} "
+              f"(กว้าง {song.semitones():.1f} semitone, "
+              f"voiced {song.voiced_ratio * 100:.0f}%)")
+        return 0
+    print('กรุณาระบุ --from-file <audio>, --set "A2:C5", --show '
+          'หรือ --record <วินาที>')
+    return 2
 
 
 def cmd_prerender(args) -> int:
@@ -191,6 +289,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_key.add_argument("--json", action="store_true",
                        help="print the full result as JSON")
     p_key.set_defaults(func=cmd_key)
+
+    p_range = sub.add_parser("range", help="manage your vocal-range profile")
+    p_range.add_argument("--from-file", default=None, metavar="AUDIO",
+                         help="estimate and save the profile from an audio file")
+    p_range.add_argument("--set", default=None, metavar='"LOW:HIGH"',
+                         help='save a manual profile, e.g. --set "A2:C5"')
+    p_range.add_argument("--show", action="store_true",
+                         help="print the saved profile")
+    p_range.add_argument("--record", default=None, metavar="SECONDS", type=float,
+                         help="record N seconds from the default input device")
+    p_range.set_defaults(func=cmd_range)
 
     p_pre = sub.add_parser("prerender",
                            help="offline 2-stem separation with the demucs CLI")

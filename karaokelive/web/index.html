@@ -186,6 +186,19 @@ input[type="range"]{width:100%; max-width:100%; min-height:44px; margin:0; accen
 .conf-fill{height:100%; width:0%; background:var(--teal-70); transition:width .3s var(--ease)}
 .conf-row{display:flex; justify-content:space-between; font-size:.85rem; color:var(--fg-70); margin-top:4px}
 #confPct{color:var(--fg); font-variant-numeric:tabular-nums}
+.range-row{display:flex; align-items:center; gap:8px; margin-top:10px; font-size:.9rem; color:var(--fg)}
+.range-row svg{flex:none; color:var(--muted-fg)}
+.range-msg{flex:1; min-width:0}
+.range-msg .range-label{color:var(--fg-70); font-weight:600}
+.range-msg.muted{color:var(--fg-70)}
+.range-chip{
+  display:inline-flex; align-items:center; padding:2px 10px; border-radius:999px;
+  font-size:.78rem; font-weight:700; white-space:nowrap; flex:none;
+  border:1px solid var(--accent); color:var(--accent);
+}
+.range-chip.down{border-color:var(--warn); color:var(--warn)}
+.range-chip.up{border-color:var(--teal); color:var(--teal)}
+.range-chip[hidden]{display:none}
 #error{
   display:none; margin:0 20px 12px; padding:12px 16px; border-radius:12px;
   background:#3B1420; color:#FECACA; border:1px solid var(--danger);
@@ -433,6 +446,11 @@ body.queue-open{overflow:hidden}
     <div class="conf-head"><svg width="20" height="20" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M207.06,72.67A111.24,111.24,0,0,0,128,40h-.4C66.07,40.21,16,91,16,153.13V176a16,16,0,0,0,16,16H224a16,16,0,0,0,16-16V152A111.25,111.25,0,0,0,207.06,72.67ZM224,176H119.71l54.76-75.3a8,8,0,0,0-12.94-9.42L99.92,176H32V153.13c0-3.08.15-6.12.43-9.13H56a8,8,0,0,0,0-16H35.27c10.32-38.86,44-68.24,84.73-71.66V80a8,8,0,0,0,16,0V56.33A96.14,96.14,0,0,1,221,128H200a8,8,0,0,0,0,16h23.67c.21,2.65.33,5.31.33,8Z"/></svg><label for="confFill" style="margin:0; font-weight:600">ความมั่นใจ</label></div>
     <div class="conf-track"><div class="conf-fill" id="confFill"></div></div>
     <div class="conf-row"><span id="confPct">0%</span><span>อัปเดตล่าสุด: <span id="keyAge">–</span></span></div>
+    <div class="range-row" id="rangeRow">
+      <svg width="20" height="20" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M212.92,17.69a8,8,0,0,0-6.86-1.45l-128,32A8,8,0,0,0,72,56V166.08A36,36,0,1,0,88,196V110.25l112-28v51.83A36,36,0,1,0,216,164V24A8,8,0,0,1,212.92,17.69ZM52,216a20,20,0,1,1,20-20A20,20,0,0,1,52,216ZM88,93.75V62.25l112-28v31.5ZM180,184a20,20,0,1,1,20-20A20,20,0,0,1,180,184Z"/></svg>
+      <span class="range-msg muted" id="rangeMsg"><span class="range-label">ช่วงเสียง:</span> ยังไม่ได้ตั้งช่วงเสียง (karaokelive range)</span>
+      <span class="range-chip" id="rangeChip" hidden></span>
+    </div>
   </section>
 </main>
 
@@ -476,6 +494,7 @@ const els = {
   demoBadge: $("demoBadge"), chromaBlock: $("chromaBlock"),
   chromaBars: $("chromaBars"),
   confFill: $("confFill"), confPct: $("confPct"), keyAge: $("keyAge"),
+  rangeMsg: $("rangeMsg"), rangeChip: $("rangeChip"),
   btnQueue: $("btnQueue"), queueCount: $("queueCount"),
   queueScrim: $("queueScrim"), queueDrawer: $("queueDrawer"),
   btnQueueClose: $("btnQueueClose"), queueTitle: $("queueTitle"),
@@ -572,6 +591,7 @@ function applyState(s) {
   els.btnStop.disabled = !running;
   if (Array.isArray(s.queue)) queueItems = s.queue;
   if (Object.prototype.hasOwnProperty.call(s, "now_playing")) nowPlaying = s.now_playing;
+  if (Object.prototype.hasOwnProperty.call(s, "range_fit")) paintRange(s.range_fit, s.profile);
   paintQueue();
   setStatus();
 }
@@ -651,6 +671,40 @@ function paintKey(k) {
   els.confFill.style.width = conf + "%";
   els.confPct.textContent = conf + "%";
   keyUpdatedAt = typeof k.updated_at === "number" ? k.updated_at * 1000 : Date.now();
+}
+function paintRange(fit, profile) {
+  if (!fit || typeof fit.message !== "string") {
+    els.rangeMsg.innerHTML = "";
+    const label = document.createElement("span");
+    label.className = "range-label";
+    label.textContent = "ช่วงเสียง: ";
+    els.rangeMsg.appendChild(label);
+    els.rangeMsg.appendChild(document.createTextNode("ยังไม่ได้ตั้งช่วงเสียง (karaokelive range)"));
+    els.rangeMsg.classList.add("muted");
+    els.rangeChip.hidden = true;
+    els.rangeChip.textContent = "";
+    return;
+  }
+  els.rangeMsg.innerHTML = "";
+  const label = document.createElement("span");
+  label.className = "range-label";
+  label.textContent = "ช่วงเสียง: ";
+  els.rangeMsg.appendChild(label);
+  let text = fit.message;
+  if (fit.song_notes) text = fit.song_notes + " — " + fit.message;
+  else if (profile && profile.notes) text = profile.notes + " — " + fit.message;
+  if (fit.approximate) text += " (ประมาณ)";
+  els.rangeMsg.appendChild(document.createTextNode(text));
+  els.rangeMsg.classList.remove("muted");
+  const shift = Number(fit.shift) || 0;
+  if (shift !== 0) {
+    els.rangeChip.hidden = false;
+    els.rangeChip.textContent = shift < 0 ? ("ลด " + (-shift)) : ("เพิ่ม " + shift);
+    els.rangeChip.className = "range-chip " + (shift < 0 ? "down" : "up");
+  } else {
+    els.rangeChip.hidden = true;
+    els.rangeChip.textContent = "";
+  }
 }
 function tickAge() {
   if (!keyUpdatedAt) { els.keyAge.textContent = "–"; return; }
@@ -941,6 +995,7 @@ function connectEvents() {
     running = !!d.running;
     if (d.meters) paintMeters(d.meters.in_db, d.meters.out_db);
     if (d.key) paintKey(d.key);
+    if (Object.prototype.hasOwnProperty.call(d, "range_fit")) paintRange(d.range_fit, d.profile);
     if (typeof d.latency_ms === "number") els.latency.textContent = d.latency_ms.toFixed(0);
     if (typeof d.error === "string" && d.error) showError(d.error);
     if (Object.prototype.hasOwnProperty.call(d, "now_playing")) {

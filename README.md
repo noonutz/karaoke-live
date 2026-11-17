@@ -60,6 +60,15 @@ karaokelive key song.mp3 --json
 # local control panel (phones and tablets on the same machine only)
 karaokelive ui            # http://127.0.0.1:8765
 karaokelive ui --demo     # exercise the UI with no audio device at all
+
+# a setlist: render instrumentals in the background while you sing
+karaokelive queue add song1.mp3 song2.flac
+karaokelive queue list
+karaokelive queue run     # demucs, one item at a time
+
+# your comfortable singing range, then a fit verdict for every song
+karaokelive range --from-file my_voice.wav
+karaokelive range --set "A2:C5"
 ```
 
 Stop with Ctrl-C.
@@ -81,6 +90,37 @@ Krumhansl-Schmuckler major and minor profiles, rotated over all 24 keys.
   guitars, unresolved motion), so treat the confidence, not the key, as the signal.
 - Live mode feeds the same detector from a 10 s rolling window, recomputed at most
   every 0.5 s so the audio callback never pays for it.
+
+## Overlay for OBS
+
+`http://127.0.0.1:8765/overlay` is a transparent page for an OBS Browser Source
+(1000x200 is a good size). It shows the key, the Camelot code, the BPM, the current
+chord and how old the estimate is, on a translucent pill that stays readable over a
+bright camera image. `?scale=1.6` enlarges it, `?simple=1` keeps only the key,
+`?label=` prefixes a caption. Nothing is drawn outside the pill, so the OBS source
+composites cleanly over video.
+
+## Setlist and pre-render
+
+Live ML separation costs a chunk of latency because the model needs the future. A
+setlist sidesteps that: queue the songs before the stream, let `queue run` (or the
+drawer's *แยกเสียงเพลงที่รอ*) separate them in the background while you sing the
+current one, then play the ready instrumental with zero separation latency. Queue
+state lives in JSON under the platform data dir, writes are atomic, and a failure
+(missing demucs, an unreadable file) is recorded on the item with the real message
+instead of disappearing.
+
+Playback of a ready item replaces the capture source, so the panel is playing the file
+rather than your system audio; stop it to go back.
+
+## Vocal range fit
+
+`karaokelive range --from-file` estimates your comfortable range with an
+autocorrelation pitch track (5th-95th percentile of voiced frames, so a couple of
+wrong octaves cannot move it) and saves it as a profile. After that, `karaokelive key`
+and the panel's key card report the song's range and whether it fits, with the
+smallest transposition that would make it fit — the shift is computed on the song's
+measured range, not guessed from the key.
 
 ## Control panel
 
@@ -134,9 +174,16 @@ the delay. Cover the video, or delay it in OBS by the same amount.
 
 ## Status
 
+- `range`: detected A3-E4, C4-C5, A2-A3, E3-E4, G3-G4 and D4-D5 exactly (0 misses,
+  voiced 100%) on synthesised melodies.
+- `tempo`: 85-174 BPM within 1.5 BPM on click tracks, 0.05 confidence on white noise,
+  no octave doubling on 8th-note hats.
+- `queue`: backend and API covered, including a missing-demucs failure that marks the
+  item failed with the real stderr instead of hanging.
 - `keydetect`: 24/24 on synthetic major and minor progressions across all 12 tonics.
-- `ui`: 7 tests over HTTP in demo mode; a real 1280x800 browser run verified the
-  meters, the key card and the 409-while-running path.
+- `ui`: HTTP tests in demo mode plus real 1280x800 browser runs that verified the
+  meters, the key card, the 409-while-running path, the queue drawer, the OBS overlay
+  composited over a bright background, and the range row.
 - `center` and `channel`: covered by tests, verified end to end on real files
   (a centred 440 Hz tone drops 33.8 dB while panned content moves < 0.1 dB).
 - `demucs`: the chunking, crossfade and latency bookkeeping are tested against a
