@@ -86,6 +86,8 @@ class Setlist:
         self.path = (Path(path) if path is not None
                      else default_state_dir() / "setlist.json")
         self._items: list[Item] = []
+        #: Thai note set when the queue file was corrupt on load ( else None).
+        self.load_error: str | None = None
         self.load()
 
     def add(self, source: str, title: str | None = None) -> Item:
@@ -205,15 +207,31 @@ class Setlist:
             raise
 
     def load(self) -> None:
-        """Re-read the queue file; a missing or unreadable file means empty."""
+        """Re-read the queue file; a missing file means empty.
+
+        A corrupt file is renamed to `<name>.corrupt-<timestamp>` and the
+        queue starts empty; `self.load_error` carries a Thai note and the
+        corrupt copy is never overwritten by a later write.
+        """
         with self._lock:
+            self.load_error = None
             try:
                 raw = json.loads(self.path.read_text(encoding="utf-8"))
             except FileNotFoundError:
                 self._items = []
                 return
-            except (OSError, ValueError):
+            except (OSError, ValueError, UnicodeDecodeError):
                 self._items = []
+                try:
+                    stamp = time.strftime("%Y%m%d-%H%M%S")
+                    backup = self.path.with_name(
+                        f"{self.path.name}.corrupt-{stamp}")
+                    os.replace(self.path, backup)
+                    self.load_error = (
+                        "ไฟล์คิวเสียหาย — เก็บสำรองไว้ที่ "
+                        f"{backup.name}")
+                except OSError:
+                    self.load_error = "ไฟล์คิวเสียหาย — เริ่มคิวใหม่"
                 return
             known = {entry.name for entry in fields(Item)}
             items = []

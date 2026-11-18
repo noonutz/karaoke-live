@@ -403,7 +403,10 @@ def cmd_queue_add(args) -> int:
 def cmd_queue_list(_args) -> int:
     from .setlist import Setlist
 
-    items = Setlist().items()
+    sl = Setlist()
+    if sl.load_error is not None:
+        print(sl.load_error)
+    items = sl.items()
     if not items:
         print("คิวว่าง")
         return 0
@@ -472,11 +475,13 @@ def cmd_queue_run(args) -> int:
                 print("เสร็จแล้ว")
                 break
     except KeyboardInterrupt:
-        # The interrupt lands on this thread only; the worker is never marked
-        # failed because of it -- the current item runs to its real result.
+        # The interrupt lands on this thread only: stop the worker promptly
+        # and leave the current item's status untouched (a "rendering" item
+        # is picked up again on the next run, never marked failed by this).
+        worker.stop(timeout=5)
         print("\nหยุดแล้ว")
     finally:
-        worker.stop()
+        worker.stop(timeout=5)
     return 0
 
 

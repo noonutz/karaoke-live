@@ -232,6 +232,99 @@ class PanelTests(unittest.TestCase):
         _status, _body = _post(self.base, "/api/nope", {})
         self.assertEqual(_status, 404)
 
+    def _raw_post(self, path: str, payload: bytes, headers: dict):
+        import http.client
+        from urllib.parse import urlsplit
+
+        parts = urlsplit(self.base)
+        conn = http.client.HTTPConnection(parts.hostname, parts.port,
+                                          timeout=10)
+        try:
+            conn.request("POST", path, body=payload, headers=headers)
+            res = conn.getresponse()
+            return res.status, json.loads(res.read().decode("utf-8"))
+        finally:
+            conn.close()
+
+    def test_garbage_content_length_is_400(self):
+        status, body = self._raw_post(
+            "/api/config", b"{}",
+            {"Content-Type": "application/json", "Content-Length": "abc"})
+        self.assertEqual(status, 400)
+        self.assertRegex(body["error"], r"[ก-๙]")
+
+    def test_oversize_declared_body_is_413_without_reading(self):
+        status, body = self._raw_post(
+            "/api/config", b"{}",
+            {"Content-Type": "application/json",
+             "Content-Length": str(2 * 1024 * 1024)})
+        self.assertEqual(status, 413)
+        self.assertIn("1 MB", body["error"])
+        self.assertRegex(body["error"], r"[ก-๙]")
+
+    def test_config_raced_with_start_still_409(self):
+        # Call the panel methods directly (no device needed): a start that
+        # lands before the config write must yield a Thai 409.
+        panel = self.panel
+        panel._set(running=True)  # a start landed first
+        try:
+            code, body = panel.api_config({"vocal_level": 0.1})
+        finally:
+            panel._set(running=False)  # leave the shared panel idle
+        self.assertEqual(code, 409)
+        self.assertRegex(body["error"], r"[ก-๙]")
+
+    def test_config_check_and_write_share_one_lock_hold(self):
+        # Atomicity: the running check and the write happen under a single
+        # lock hold, so a start cannot slip between them. Deterministic:
+        # exactly one acquire/release pair by this thread during the call.
+        import threading as _threading
+
+        panel = self.panel
+        panel._set(running=False)
+
+        class RecordingLock:
+            def __init__(self):
+                self._inner = _threading.Lock()
+                self.events: list = []  # (thread id, "acquire"/"release")
+
+            def __enter__(self):
+                self._inner.acquire()
+                self.events.append((_threading.get_ident(), "acquire"))
+                return self
+
+            def __exit__(self, *exc):
+                self.events.append((_threading.get_ident(), "release"))
+                self._inner.release()
+                return False
+
+        real_lock = panel._lock
+        rec = RecordingLock()
+        panel._lock = rec
+        stop = _threading.Event()
+
+        def racer():
+            while not stop.is_set():
+                panel._set(running=True)
+                panel._set(running=False)
+
+        other = _threading.Thread(target=racer, daemon=True)
+        other.start()
+        try:
+            me = _threading.get_ident()
+            before = len(rec.events)
+            code, body = panel.api_config({"vocal_level": 0.5})
+            mine = [e for e in rec.events[before:] if e[0] == me]
+        finally:
+            stop.set()
+            other.join(timeout=10)
+            panel._lock = real_lock
+            panel._set(running=False)
+        self.assertEqual(mine, [(me, "acquire"), (me, "release")])
+        self.assertIn(code, (200, 409))
+        if code == 409:
+            self.assertRegex(body["error"], r"[ก-๙]")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

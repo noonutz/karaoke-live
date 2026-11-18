@@ -17,11 +17,13 @@ _ERROR_TAIL_LINES = 20
 _ERROR_MAX_CHARS = 300
 
 
-def separate_file(source: str, out_dir: str, model: str = "htdemucs") -> str:
+def separate_file(source: str, out_dir: str, model: str = "htdemucs",
+                  timeout: float = 3600.0) -> str:
     """Separate `source` and return the written `no_vocals.*` path.
 
     Raises `RuntimeError` (carrying the last 20 lines of stderr) when demucs
-    is missing or the separation fails.
+    is missing or the separation fails, or a Thai `RuntimeError` naming the
+    model and the file when demucs takes longer than `timeout` seconds.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -30,7 +32,12 @@ def separate_file(source: str, out_dir: str, model: str = "htdemucs") -> str:
            "--two-stems", "vocals", "-n", model,
            "-o", str(out), str(source)]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"demucs ใช้เวลานานเกินกำหนด (timeout {timeout:g} วินาที) "
+            f"โมเดล {model} ไฟล์ {source}") from exc
     except OSError as exc:
         raise RuntimeError(f"demucs failed to start: {exc}") from exc
     if proc.returncode != 0:
@@ -91,7 +98,7 @@ class PrerenderWorker(threading.Thread):
         except KeyError:
             pass  # removed mid-render; nothing left to mark
 
-    def stop(self, timeout: float | None = None) -> None:
+    def stop(self, timeout: float | None = 5.0) -> None:
         """Signal the loop to exit and wait for the thread to finish."""
         self._stop_event.set()
         self.join(timeout=timeout)

@@ -62,6 +62,10 @@ BLOCKSIZE = 512
 SSE_INTERVAL_S = 0.5
 MIN_DB = -90.0
 
+#: Largest accepted JSON request body (1 MiB); larger declared bodies are
+#: rejected without being read.
+MAX_JSON_BODY_BYTES = 1024 * 1024
+
 WEB_DIR = Path(__file__).resolve().parent / "web"
 
 #: Keys cycled through in demo mode: (tonic, mode, camelot).
@@ -251,8 +255,10 @@ class FilePlayer:
             if self._output:
                 try:
                     dev = realtime.find_device(self._output, want_input=False)
-                except (SystemExit, RuntimeError) as exc:
-                    return f"ไม่พบอุปกรณ์เล่นเสียงที่ระบุ ({exc})"
+                except realtime.DeviceNotFound as exc:
+                    return str(exc)
+                except Exception as exc:
+                    return f"เริ่มเล่นไม่สำเร็จ: {type(exc).__name__}"
             self._data = np.ascontiguousarray(data, dtype=np.float32)
             self._stream = sd.OutputStream(
                 samplerate=SAMPLE_RATE, channels=2, dtype="float32",
@@ -461,13 +467,6 @@ class ControlPanel:
     # -- API -----------------------------------------------------------
     def api_config(self, body: dict) -> tuple[int, dict]:
         """Partial config update; rejected with 409 while running."""
-        with self._lock:
-            if self._state["running"]:
-                return 409, {
-                    "error": ("กำลังเล่นอยู่ กรุณากดหยุดก่อนเปลี่ยน"
-                              "การตั้งค่า"),
-                    "state": self.snapshot_locked(),
-                }
         updates: dict = {}
         if "capture" in body:
             updates["capture"] = str(body["capture"])
@@ -498,8 +497,17 @@ class ControlPanel:
             updates["bass_hz"] = bass
         if "mono_guard" in body:
             updates["mono_guard"] = bool(body["mono_guard"])
-        self._set(**updates)
-        return 200, self.snapshot()
+        # The running check and the write share one lock hold, so a start
+        # that lands in between cannot mutate config under a live engine.
+        with self._lock:
+            if self._state["running"]:
+                return 409, {
+                    "error": ("กำลังเล่นอยู่ กรุณากดหยุดก่อนเปลี่ยน"
+                              "การตั้งค่า"),
+                    "state": self.snapshot_locked(),
+                }
+            self._state.update(updates)
+            return 200, self.snapshot_locked()
 
     def snapshot_locked(self) -> dict:
         """Copy of state; caller must hold the lock (see `api_config`)."""
@@ -538,17 +546,12 @@ class ControlPanel:
             try:
                 self._in_dev = realtime.find_device(capture, want_input=True)
                 self._out_dev = realtime.find_device(output, want_input=False)
-            except SystemExit as exc:
-                msg = ("ไม่พบอุปกรณ์เสียงที่ระบุ กรุณาเลือกจากรายการ "
-                       f"({exc})")
+            except realtime.DeviceNotFound as exc:
+                msg = str(exc)
                 self._fail(msg)
                 return 400, {"error": msg, "devices": self.device_lists()}
-            except RuntimeError as exc:
-                msg = f"เปิดเสียงสดไม่ได้ ({exc})"
-                self._fail(msg)
-                return 400, {"error": msg, "devices": self.device_lists()}
-            except Exception as exc:  # pragma: no cover - defensive
-                msg = f"เปิดเสียงสดไม่ได้ ({exc})"
+            except Exception as exc:
+                msg = f"เริ่มเล่นไม่สำเร็จ: {type(exc).__name__}"
                 self._fail(msg)
                 return 400, {"error": msg, "devices": self.device_lists()}
         self._engine_failures = 0  # per-run counter (see _engine_failure)
@@ -764,10 +767,10 @@ class ControlPanel:
             return
         try:
             self._run_audio()
-        except SystemExit as exc:
-            self._fail(str(exc) or "เลือกอุปกรณ์เสียงไม่ถูกต้อง")
+        except realtime.DeviceNotFound as exc:
+            self._fail(str(exc))
         except Exception as exc:
-            self._fail(str(exc) or repr(exc))
+            self._fail(f"เริ่มเล่นไม่สำเร็จ: {type(exc).__name__}")
         finally:
             with self._lock:
                 self._state["running"] = False
@@ -1068,7 +1071,15 @@ class _PanelHandler(BaseHTTPRequestHandler):
             pass
 
     def _read_json_body(self) -> tuple[int | None, dict]:
-        length = int(self.headers.get("Content-Length") or 0)
+        raw_value = self.headers.get("Content-Length")
+        try:
+            length = int(raw_value) if raw_value not in (None, "") else 0
+        except (TypeError, ValueError):
+            return 400, {"error": "ความยาวข้อมูลไม่ถูกต้อง (Content-Length)"}
+        if length < 0:
+            return 400, {"error": "ความยาวข้อมูลไม่ถูกต้อง (Content-Length)"}
+        if length > MAX_JSON_BODY_BYTES:
+            return 413, {"error": "ข้อมูลใหญ่เกินไป (สูงสุด 1 MB)"}
         raw = self.rfile.read(length) if length > 0 else b""
         if not raw.strip():
             return None, {}

@@ -244,5 +244,82 @@ class SeparateFileTests(unittest.TestCase):
                 separate_file("/nonexistent/song.mp3", tmp)
 
 
+class SeparateFileTimeoutTests(unittest.TestCase):
+    def test_timeout_expired_raises_thai_error(self):
+        import subprocess
+        from unittest import mock
+
+        def hung(cmd, **kwargs):
+            time.sleep(0.3)  # a hung demucs, slower than the timeout below
+            raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch("karaokelive.prerender.subprocess.run",
+                            side_effect=hung) as fake:
+                with self.assertRaises(RuntimeError) as ctx:
+                    separate_file("/music/song.mp3", tmp,
+                                  model="htdemucs", timeout=0.2)
+        message = str(ctx.exception)
+        self.assertRegex(message, r"[ก-๙]")  # Thai message
+        self.assertIn("htdemucs", message)  # names the model
+        self.assertIn("/music/song.mp3", message)  # names the file
+        _, kwargs = fake.call_args
+        self.assertEqual(kwargs.get("timeout"), 0.2)
+
+    def test_slow_separator_failure_marks_failed_with_thai(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "setlist.json"
+            sl = Setlist(path=path)
+            item = sl.add("/music/song.mp3")
+
+            def stub(_src, _out):
+                time.sleep(0.3)  # simulate a hung demucs
+                raise RuntimeError(
+                    "demucs ใช้เวลานานเกินกำหนด (timeout 0.2 วินาที) "
+                    "โมเดล htdemucs ไฟล์ /music/song.mp3")
+
+            worker = PrerenderWorker(sl, tmp, separator=stub, poll_s=0.05)
+            worker.start()
+            try:
+                done = _wait_for(sl, item.id, "failed")
+            finally:
+                worker.stop(timeout=5)
+        self.assertRegex(done.error, r"[ก-๙]")
+        self.assertIsNone(done.instrumental)
+
+    def test_stop_defaults_to_bounded_join(self):
+        import inspect
+
+        self.assertEqual(
+            inspect.signature(PrerenderWorker.stop).parameters["timeout"]
+            .default, 5.0)
+
+
+class CorruptQueueTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = Path(self._tmp.name)
+        self.path = self.dir / "setlist.json"
+
+    def test_corrupt_file_is_backed_up_not_wiped(self):
+        self.path.write_text("{not valid json!!!", encoding="utf-8")
+        sl = Setlist(path=self.path)
+        backups = list(self.dir.glob("setlist.json.corrupt-*"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(sl.items(), [])
+        self.assertIsNotNone(sl.load_error)
+        self.assertRegex(sl.load_error, r"[ก-๙]")
+        self.assertIn(backups[0].name, sl.load_error)
+        # The corrupt bytes survive in the backup ...
+        self.assertIn("not valid", backups[0].read_text(encoding="utf-8"))
+        # ... and the next write starts a fresh queue instead of
+        # overwriting the backup.
+        sl.add("/music/fresh.mp3")
+        self.assertTrue(backups[0].is_file())
+        data = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(len(data), 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

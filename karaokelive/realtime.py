@@ -58,10 +58,25 @@ def format_devices(rows: Iterable[dict]) -> str:
     return "\n".join(lines)
 
 
+class DeviceNotFound(Exception):
+    """No audio device matches a name query.
+
+    `str(exc)` is a short Thai message for the UI; the full device table
+    rides along in `device_table` for the CLI only (`LiveRouter.run`
+    prints it).
+    """
+
+    def __init__(self, query: str, device_table: str = ""):
+        super().__init__(f'ไม่พบอุปกรณ์ชื่อ "{query}"')
+        self.query = query
+        self.device_table = device_table
+
+
 def find_device(query: str, want_input: bool) -> int:
     """Resolve a name substring to a device index."""
     sd = _sd()
-    query = query.strip().lower()
+    original = query.strip()
+    query = original.lower()
     rows = list_devices()
     matches = [
         r for r in rows
@@ -69,9 +84,7 @@ def find_device(query: str, want_input: bool) -> int:
         and (r["inputs"] > 0 if want_input else r["outputs"] > 0)
     ]
     if not matches:
-        kind = "input (capture)" if want_input else "output (playback)"
-        raise SystemExit(f"no {kind} device matches {query!r}\n\n"
-                         f"{format_devices(rows)}")
+        raise DeviceNotFound(original, device_table=format_devices(rows))
     if len(matches) > 1:
         # prefer the default host API entry when several share a name
         try:
@@ -156,8 +169,15 @@ class LiveRouter:
         # biquad tail or a half-filled demucs buffer from the previous run.
         self.engine.reset()
         sd = _sd()
-        in_dev = find_device(self.capture_query, want_input=True)
-        out_dev = find_device(self.playback_query, want_input=False)
+        try:
+            in_dev = find_device(self.capture_query, want_input=True)
+            out_dev = find_device(self.playback_query, want_input=False)
+        except DeviceNotFound as exc:
+            # CLI only: show the full device table, then exit with the
+            # short Thai message (the panel uses `str(exc)` instead).
+            if exc.device_table:
+                print(exc.device_table)
+            raise SystemExit(str(exc)) from exc
         latency = (self.engine.latency_frames + self.blocksize) / self.sample_rate
         self._log(f"capture  : [{in_dev}] {sd.query_devices(in_dev)['name']}")
         self._log(f"playback : [{out_dev}] {sd.query_devices(out_dev)['name']}")
