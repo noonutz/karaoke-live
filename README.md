@@ -197,6 +197,12 @@ the delay. Cover the video, or delay it in OBS by the same amount.
   training data is undocumented. Fine for personal use, a question mark for
   redistribution. This repo never ships weights -- `demucs` downloads them.
 
+## Testing on a Mac
+
+`docs/MAC-TEST.md` is the checklist for the parts that cannot be verified on a headless
+Linux box: devices, latency, the overlay in OBS, the mic range profile, four-stem playback,
+and the two hardware failure modes worth knowing about.
+
 ## Status
 
 - `limiter`: -12 dBFS passes untouched (GR 0.0, peak preserved), +12 dB over full scale comes
