@@ -72,8 +72,14 @@ def load(path: str | Path, sample_rate: int, channels: int = 2) -> np.ndarray:
     return pcm.reshape(-1, channels).astype(np.float32, copy=False)
 
 
-def save(path: str | Path, data: np.ndarray, sample_rate: int) -> None:
-    """Encode float32 (frames, channels) to `path`; format comes from the suffix."""
+def save(path: str | Path, data: np.ndarray, sample_rate: int,
+         bits: int = 24) -> None:
+    """Encode float32 (frames, channels) to `path`; format comes from the suffix.
+
+    `bits` only affects WAV output. 24-bit is the default; use 16 where the file
+    has to be readable by Python's `wave` module on every version (older ones
+    reject both 24-bit and WAVE_FORMAT_EXTENSIBLE headers).
+    """
     data = np.ascontiguousarray(np.clip(data, -1.0, 1.0), dtype="<f4")
     if data.ndim == 1:
         data = data[:, None]
@@ -81,7 +87,7 @@ def save(path: str | Path, data: np.ndarray, sample_rate: int) -> None:
     codec = []
     suffix = Path(path).suffix.lower()
     if suffix == ".wav":
-        codec = ["-c:a", "pcm_s24le"]
+        codec = ["-c:a", "pcm_s16le" if bits == 16 else "pcm_s24le"]
     elif suffix == ".mp3":
         codec = ["-c:a", "libmp3lame", "-b:a", "192k"]
     elif suffix in (".m4a", ".aac"):

@@ -35,7 +35,7 @@ def _make_stem_wavs(directory: str, seconds: float = 8.0) -> dict:
         tone = 0.3 * np.sin(2 * np.pi * freq * t)
         data = np.stack([tone, tone], axis=1).astype(np.float32)
         path = str(Path(directory) / f"{stem}.wav")
-        audio_io.save(path, data, sample_rate)
+        audio_io.save(path, data, sample_rate, bits=16)
         paths[stem] = path
     return paths
 

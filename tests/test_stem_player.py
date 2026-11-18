@@ -81,7 +81,7 @@ class StemPlayerTests(unittest.TestCase):
         self.paths = {}
         for stem in STEMS:
             path = str(self.dir / f"{stem}.wav")
-            audio_io.save(path, self.signals[stem], SR)
+            audio_io.save(path, self.signals[stem], SR, bits=16)
             self.paths[stem] = path
         self.players: list[StemPlayer] = []
         self.addCleanup(self._close_players)
@@ -217,7 +217,7 @@ class StemPlayerTests(unittest.TestCase):
 
     def test_wrong_sample_rate_raises_naming_file(self):
         (self.dir / "bass.wav").write_bytes(b"")  # replaced below
-        audio_io.save(str(self.dir / "bass.wav"), self.signals["bass"], 44100)
+        audio_io.save(str(self.dir / "bass.wav"), self.signals["bass"], 44100, bits=16)
         player = self._player()
         with self.assertRaises(ValueError) as ctx:
             player.read(64)
@@ -287,7 +287,7 @@ class StemPlayerTests(unittest.TestCase):
 
     def test_short_stem_is_zero_padded(self):
         short = self.signals["other"][: N // 2]
-        audio_io.save(str(self.dir / "other.wav"), short, SR)
+        audio_io.save(str(self.dir / "other.wav"), short, SR, bits=16)
         player = self._player()
         mixed = self._read_all(player)
         self.assertEqual(len(mixed), N)
