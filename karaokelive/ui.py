@@ -26,11 +26,16 @@ Routes (all JSON is `application/json; charset=utf-8`):
   400 (Thai) on duplicate source or missing file
 * `POST /api/queue/remove {"id"}` -> 200 `{"items": [...]}`
 * `POST /api/queue/run` -> starts/reuses the PrerenderWorker, 200
-* `POST /api/queue/play {"id"}` -> file playback of a `ready` item:
-  409 (Thai) when not ready, 400 when something else is playing
+* `POST /api/queue/play {"id"}` -> playback of a `ready` item: four stems
+  via `StemPlayer`, else the `FilePlayer` mix; 409 (Thai) when not ready,
+  400 when something else is playing
 * `POST /api/queue/stop` -> stops file playback (`now_playing` -> null)
+* `POST /api/playback {"drums", "vocals", "loop_bars"}` -> live stem gains
+  + 4-bar loop; 409 (Thai) without stems playing; returns the `stems` block
+* `POST /api/panic` -> silence everything (playback + live run off, error
+  cleared); 200, the panel restarts immediately afterwards
 * `GET /api/events`   -> Server-Sent Events, one frame every 500 ms
-  (payload also carries `now_playing` and `queue_count`)
+  (payload also carries `now_playing`, `queue_count` and `stems`)
 
 Anything else is a 404. Local only, so no CORS handling.
 """
@@ -55,6 +60,8 @@ from .keydetect import RollingKeyDetector, estimate_chord
 from .prerender import PrerenderWorker
 from .range import Profile, estimate_range, fit_song, midi_to_name
 from .setlist import Setlist, default_state_dir
+from .stem_player import STEMS as STEM_NAMES
+from .stem_player import StemPlayer
 from .tempo import RollingTempoDetector
 
 SAMPLE_RATE = 48000
@@ -80,6 +87,31 @@ _DEMO_KEYS = (
 
 #: Chords cycled through in demo mode: A minor's diatonic set.
 _DEMO_CHORDS = ("Am", "F", "C", "G")
+
+
+def _bar_seconds(bpm: float) -> float:
+    """Seconds per 4/4 bar at `bpm` (four beats)."""
+    return 60.0 / float(bpm) * 4.0
+
+
+def _snap_loop(position: float, bpm: float, bars: int) -> tuple[float, float]:
+    """`(start_s, end_s)` of a `bars`-bar loop starting at/before `position`.
+
+    The start snaps DOWN to the 2-bar phrase grid (bar-aligned, so a 4-bar
+    loop always begins on an even bar — e.g. 7.3 s at 120 BPM gives
+    (4.0, 12.0)) and runs `bars` bars forward from there.
+    """
+    bar = _bar_seconds(bpm)
+    grid = 2.0 * bar
+    start = math.floor(float(position) / grid) * grid
+    start = max(0.0, start)
+    end = start + int(bars) * bar
+    return (float(start), float(end))
+
+
+def _empty_stems() -> dict:
+    """Fresh `state["stems"]` block: nothing available, unity gains, no loop."""
+    return {"available": False, "drums": 1.0, "vocals": 1.0, "loop": None}
 
 
 def _db(block: np.ndarray) -> float:
@@ -232,6 +264,27 @@ class FilePlayer:
         self._stream = None
         self._data: np.ndarray | None = None
         self._pos = 0
+        # Panel parity with `StemPlayer`: stored (no audio effect on a mix),
+        # so `/api/playback` can treat both players alike.
+        self._gains = {"drums": 1.0, "vocals": 1.0}
+        self._loop: tuple[float | None, float | None] | None = None
+
+    def set_gain(self, stem: str, value: float) -> None:
+        """Remember a stem gain (a mix has no stems: no audio effect)."""
+        self._gains[str(stem)] = float(min(1.0, max(0.0, value)))
+
+    def set_loop(self, start_s: float | None,
+                 end_s: float | None) -> None:
+        """Remember a loop range (a mix loops whole: no audio effect)."""
+        if start_s is None and end_s is None:
+            self._loop = None
+            return
+        self._loop = (start_s, end_s)
+
+    @property
+    def position_s(self) -> float:
+        """Current playback position in seconds (from the panel state)."""
+        return self._panel._now_playing_position(self.item_id)
 
     def start(self) -> str | None:
         """Start playback; returns an error message, or `None` on success."""
@@ -320,6 +373,137 @@ class FilePlayer:
                 break
 
 
+class StemPlayback(StemPlayer):
+    """A `StemPlayer` the panel can start/stop like a `FilePlayer`.
+
+    Real mode drives `read()` from an `sd.OutputStream` callback; demo mode
+    advances through `read()` on a timer thread (so loops wrap exactly as on
+    device) and mirrors the position into the panel state. Gains and the loop
+    are the inherited `StemPlayer` ones, so `/api/playback` applies live.
+    """
+
+    def __init__(self, panel: "ControlPanel", item_id: str, title: str,
+                 paths: dict[str, str], demo: bool, output: str):
+        super().__init__(paths, sample_rate=SAMPLE_RATE)
+        self._panel = panel
+        self.item_id = item_id
+        self.title = title
+        self.duration_s = float(self.duration_s)
+        self._demo = demo
+        self._output = output
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._stream = None
+        self._finished = False
+
+    def start(self) -> str | None:
+        """Start playback; returns an error message, or `None` on success."""
+        if self._demo:
+            self._thread = threading.Thread(
+                target=self._demo_run, name="stem-player", daemon=True)
+            self._thread.start()
+            return None
+        try:
+            import sounddevice as sd
+        except Exception:
+            return "ไม่พบ sounddevice: ติดตั้งด้วย pip install sounddevice"
+        try:
+            dev = None
+            if self._output:
+                try:
+                    dev = realtime.find_device(self._output, want_input=False)
+                except realtime.DeviceNotFound as exc:
+                    return str(exc)
+                except Exception as exc:
+                    return f"เริ่มเล่นไม่สำเร็จ: {type(exc).__name__}"
+            self._stream = sd.OutputStream(
+                samplerate=SAMPLE_RATE, channels=2, dtype="float32",
+                device=dev, blocksize=BLOCKSIZE, latency="low",
+                callback=self._callback)
+            self._stream.start()
+        except Exception as exc:
+            self._stream = None
+            return f"เล่นเสียงไม่ได้ ({exc})"
+        return None
+
+    def stop(self) -> None:
+        """Stop playback and release the device/thread (safe when idle)."""
+        self._stop.set()
+        stream, self._stream = self._stream, None
+        if stream is not None:
+            try:
+                stream.stop()
+            except Exception:
+                pass
+            try:
+                stream.close()
+            except Exception:
+                pass
+        thread, self._thread = self._thread, None
+        if (thread is not None and thread.is_alive()
+                and thread is not threading.current_thread()):
+            thread.join(timeout=5)
+
+    @property
+    def _at_end(self) -> bool:
+        """True when the song is over (a loop wraps forever, never ending)."""
+        return self._loop is None and self._pos >= self._frames
+
+    # -- internals -----------------------------------------------------
+    def _callback(self, outdata, frames, _time_info, _status) -> None:
+        if self._stop.is_set():
+            outdata.fill(0)
+            return
+        try:
+            data = self.read(frames)
+        except Exception:
+            outdata.fill(0)
+            return
+        got = data.shape[0]
+        if got >= frames:
+            outdata[:] = data[:frames]
+        else:
+            if got:
+                outdata[:got] = data
+            outdata[got:] = 0
+        try:
+            self._panel._sync_stem_position(
+                self, self.item_id, finished=self._at_end,
+                block=np.asarray(outdata))
+        except Exception:
+            pass
+        if self._at_end and not self._finished:
+            # End of song on the audio thread: go silent now, release the
+            # device from a helper thread (never block the callback).
+            self._finished = True
+            helper = threading.Thread(target=self._delayed_stop,
+                                      name="stem-player-stop", daemon=True)
+            helper.start()
+
+    def _delayed_stop(self) -> None:
+        time.sleep(0.3)
+        try:
+            self.stop()
+        except Exception:
+            pass
+
+    def _demo_run(self) -> None:
+        step = 0.1
+        while not self._stop.is_set():
+            time.sleep(step)
+            if self._stop.is_set():
+                break
+            try:
+                self.read(max(int(step * self.sample_rate), 1))
+                ended = self._at_end
+                self._panel._sync_stem_position(
+                    self, self.item_id, finished=ended)
+            except Exception:
+                break
+            if ended:
+                break
+
+
 class ControlPanel:
     """Owns one processor pipeline and the HTTP server in front of it."""
 
@@ -348,6 +532,8 @@ class ControlPanel:
             "devices": [],
             "queue": [],
             "now_playing": None,
+            "stems": _empty_stems(),
+            "panicked_at": None,
             "range_fit": _demo_range_fit() if self.demo else None,
             "profile": (_profile_payload(_demo_profile())
                         if self.demo else _profile_payload()),
@@ -355,7 +541,7 @@ class ControlPanel:
         self.setlist = (setlist if setlist is not None
                         else Setlist(path=default_state_dir() / "setlist.json"))
         self.prerender = prerender
-        self._player: FilePlayer | None = None
+        self._player: FilePlayer | StemPlayer | None = None
         self._sync_queue()
         try:
             self._state["devices"] = realtime.list_devices()
@@ -509,6 +695,15 @@ class ControlPanel:
             self._state.update(updates)
             return 200, self.snapshot_locked()
 
+    def _stems_snapshot_locked(self) -> dict:
+        """Copy of `state["stems"]`; caller must hold the lock."""
+        stems = self._state.get("stems") or {}
+        loop = stems.get("loop")
+        return {"available": bool(stems.get("available", False)),
+                "drums": float(stems.get("drums", 1.0)),
+                "vocals": float(stems.get("vocals", 1.0)),
+                "loop": dict(loop) if isinstance(loop, dict) else None}
+
     def snapshot_locked(self) -> dict:
         """Copy of state; caller must hold the lock (see `api_config`)."""
         st = self._state
@@ -525,6 +720,7 @@ class ControlPanel:
                 "devices": list(st["devices"]),
                 "queue": [dict(item) for item in st.get("queue", [])],
                 "now_playing": dict(now) if now is not None else None,
+                "stems": self._stems_snapshot_locked(),
                 "range_fit": (dict(range_fit)
                               if isinstance(range_fit, dict) else None),
                 "profile": (dict(profile)
@@ -614,12 +810,23 @@ class ControlPanel:
             self.prerender = worker
         return 200, {"started": True}
 
-    def api_queue_play(self, body: dict) -> tuple[int, dict]:
-        """Play a `ready` item's instrumental; live engine is bypassed.
+    def _stem_paths(self, item) -> dict[str, str] | None:
+        """The four stem paths when `item` carries all of them, else `None`."""
+        stems = getattr(item, "stems", None)
+        if not isinstance(stems, dict):
+            return None
+        if not all(stems.get(name) for name in STEM_NAMES):
+            return None
+        return {name: str(stems[name]) for name in STEM_NAMES}
 
-        Returns 404 when the id is unknown, 409 (Thai) when the item is not
-        ready yet or has failed, and 400 when something else is playing or
-        the stream cannot be opened.
+    def api_queue_play(self, body: dict) -> tuple[int, dict]:
+        """Play a `ready` item; live engine is bypassed.
+
+        Items with four stems play through a `StemPlayback` (per-stem gains
+        and a loop, driven by `/api/playback`); anything else falls back to
+        the `FilePlayer` mix. Returns 404 when the id is unknown, 409 (Thai)
+        when the item is not ready yet or has failed, and 400 when something
+        else is playing or the stream cannot be opened.
         """
         item_id = str(body.get("id") or "").strip()
         if not item_id:
@@ -629,25 +836,49 @@ class ControlPanel:
             return 404, {"error": "ไม่พบเพลงนี้ในคิว"}
         if item.status == "failed":
             return 409, {"error": f"แยกเสียงไม่สำเร็จ ({item.error or 'ดูรายละเอียดในคิว'})"}
-        if item.status != "ready" or not item.instrumental:
+        stem_paths = self._stem_paths(item) if item.status == "ready" else None
+        if item.status != "ready" or (stem_paths is None
+                                      and not item.instrumental):
             label = _QUEUE_STATUS_TH.get(item.status, item.status)
             return 409, {"error": f"เพลงนี้ยังไม่พร้อม (สถานะ: {label})"}
         with self._lock:
             if self._state["now_playing"] is not None:
                 return 400, {"error": "กำลังเล่นเพลงอื่นอยู่ กรุณากดหยุดก่อน"}
-        if not os.path.exists(item.instrumental):
-            return 400, {"error": "ไม่พบไฟล์เสียงที่แยกไว้ กรุณารันแยกเสียงใหม่"}
-        try:
-            duration_s = float(item.duration_s) \
-                if item.duration_s else self._probe_duration(item.instrumental)
-        except Exception:
-            duration_s = 0.0
-        if not duration_s or duration_s <= 0:
-            return 400, {"error": "อ่านความยาวเพลงไม่ได้ กรุณาลองใหม่อีกครั้ง"}
         with self._lock:
             output = self._state["output"]
-        player = FilePlayer(self, item.id, item.title, item.instrumental,
-                            duration_s, self.demo, output)
+        if stem_paths is not None:
+            player: FilePlayer | StemPlayer = StemPlayback(
+                self, item.id, item.title, stem_paths, self.demo, output)
+            try:
+                duration_s = float(item.duration_s) if item.duration_s else 0.0
+            except Exception:
+                duration_s = 0.0
+            if not duration_s or duration_s <= 0:
+                duration_s = player.duration_s
+            if not duration_s or duration_s <= 0:
+                try:
+                    player.stop()
+                except Exception:
+                    pass
+                if isinstance(player, StemPlayer):
+                    try:
+                        player.close()
+                    except Exception:
+                        pass
+                return 400, {"error": "อ่านความยาวเพลงไม่ได้ กรุณาลองใหม่อีกครั้ง"}
+        else:
+            assert item.instrumental is not None
+            if not os.path.exists(item.instrumental):
+                return 400, {"error": "ไม่พบไฟล์เสียงที่แยกไว้ กรุณารันแยกเสียงใหม่"}
+            try:
+                duration_s = float(item.duration_s) \
+                    if item.duration_s else self._probe_duration(item.instrumental)
+            except Exception:
+                duration_s = 0.0
+            if not duration_s or duration_s <= 0:
+                return 400, {"error": "อ่านความยาวเพลงไม่ได้ กรุณาลองใหม่อีกครั้ง"}
+            player = FilePlayer(self, item.id, item.title, item.instrumental,
+                                duration_s, self.demo, output)
         # Switch to file playback first (the live engine is bypassed, so the
         # vocal level drops to 0): the player thread only advances a
         # `now_playing` row that already exists, so the state must be in
@@ -669,6 +900,8 @@ class ControlPanel:
                 "error": None,
                 "now_playing": {"id": item.id, "title": item.title,
                                 "position_s": 0.0, "duration_s": duration_s},
+                "stems": {"available": stem_paths is not None,
+                          "drums": 1.0, "vocals": 1.0, "loop": None},
                 "range_fit": range_fit,
             })
             self._player = player
@@ -682,8 +915,98 @@ class ControlPanel:
                 if self._player is player:
                     self._player = None
                 self._state["now_playing"] = None
+                self._state["stems"] = _empty_stems()
                 self._state["error"] = error
             return 400, {"error": error}
+        return 200, self.snapshot()
+
+    def api_playback(self, body: dict) -> tuple[int, dict]:
+        """Live stem mixing: gains plus a 4-bar loop; 409 without stems.
+
+        `body` carries the panel's full values (`drums`/`vocals` in 0..1 and
+        `loop_bars` 4 or 0) so a stale toggle can never desync the server.
+        `loop_bars == 4` loops four bars snapped DOWN to the bar grid from the
+        item's `bpm`; `0` clears the loop. Returns the new `stems` block.
+        """
+        if not isinstance(body, dict):
+            return 400, {"error": "ข้อมูล playback ต้องเป็น JSON object"}
+        with self._lock:
+            player = self._player
+            now = self._state.get("now_playing")
+            stems = self._stems_snapshot_locked()
+        if (player is None or now is None or not stems["available"]
+                or not isinstance(player, StemPlayer)):
+            return 409, {"error": "ยังไม่มีเพลงแบบแยกสเต็มกำลังเล่น"}
+        try:
+            drums = float(body.get("drums", stems["drums"]))
+            vocals = float(body.get("vocals", stems["vocals"]))
+        except (TypeError, ValueError):
+            return 400, {"error": "ระดับเสียงกลอง/เสียงร้องต้องเป็นตัวเลข 0-1"}
+        if not 0.0 <= drums <= 1.0 or not 0.0 <= vocals <= 1.0:
+            return 400, {"error": "ระดับเสียงกลอง/เสียงร้องต้องอยู่ระหว่าง 0 ถึง 1"}
+        current_bars = 0
+        current_loop = stems["loop"]
+        if isinstance(current_loop, dict) and current_loop.get("active"):
+            try:
+                current_bars = int(current_loop.get("bars", 4))
+            except (TypeError, ValueError):
+                current_bars = 4
+        try:
+            loop_bars = int(body.get("loop_bars", current_bars))
+        except (TypeError, ValueError):
+            return 400, {"error": "วนลูปได้เฉพาะ 0 หรือ 4 ห้อง"}
+        if loop_bars not in (0, 4):
+            return 400, {"error": "วนลูปได้เฉพาะ 0 หรือ 4 ห้อง"}
+        loop: dict | None = None
+        if loop_bars == 4:
+            try:
+                item = self.setlist.get(str(now.get("id") or ""))
+            except Exception:
+                item = None
+            bpm = getattr(item, "bpm", None) if item is not None else None
+            try:
+                bpm_f = float(bpm) if bpm is not None else 0.0
+            except (TypeError, ValueError):
+                bpm_f = 0.0
+            if bpm_f <= 0:
+                return 400, {"error": "เพลงนี้ไม่มีข้อมูลจังหวะ (bpm) วนลูปไม่ได้"}
+            try:
+                position = float(player.position_s)
+            except Exception:
+                position = 0.0
+            start_s, end_s = _snap_loop(position, bpm_f, loop_bars)
+            try:
+                player.set_loop(start_s, end_s)
+            except Exception as exc:
+                return 400, {"error": f"ตั้งวนลูปไม่ได้ ({exc})"}
+            loop = {"active": True, "start_s": float(start_s),
+                    "end_s": float(end_s), "bars": loop_bars}
+        else:
+            try:
+                player.set_loop(None, None)
+            except Exception as exc:
+                return 400, {"error": f"ยกเลิกวนลูปไม่ได้ ({exc})"}
+        try:
+            player.set_gain("drums", drums)
+            player.set_gain("vocals", vocals)
+        except Exception as exc:
+            return 400, {"error": f"ปรับเสียงสเต็มไม่ได้ ({exc})"}
+        with self._lock:
+            self._state["stems"] = {"available": True, "drums": float(drums),
+                                    "vocals": float(vocals), "loop": loop}
+            return 200, self._stems_snapshot_locked()
+
+    def api_panic(self) -> tuple[int, dict]:
+        """Silence everything: stop playback and the live run, clear errors.
+
+        Records `panicked_at` and returns 200; start/queue-play work again
+        immediately afterwards.
+        """
+        self.stop_audio()
+        self.api_queue_stop()
+        with self._lock:
+            self._state["error"] = None
+            self._state["panicked_at"] = time.time()
         return 200, self.snapshot()
 
     def api_queue_stop(self) -> tuple[int, dict]:
@@ -695,8 +1018,14 @@ class ControlPanel:
                 player.stop()
             except Exception:
                 pass
+            if isinstance(player, StemPlayer):
+                try:
+                    player.close()
+                except Exception:
+                    pass
         with self._lock:
             self._state["now_playing"] = None
+            self._state["stems"] = _empty_stems()
             self._state["meters"] = {"in_db": MIN_DB, "out_db": MIN_DB}
         return 200, self.snapshot()
 
@@ -711,6 +1040,46 @@ class ControlPanel:
         with self._lock:
             now = self._state.get("now_playing")
             return now.get("id") if isinstance(now, dict) else None
+
+    def _now_playing_position(self, item_id: str) -> float:
+        """Current `now_playing.position_s` for `item_id` (0 when not live)."""
+        with self._lock:
+            now = self._state.get("now_playing")
+            if isinstance(now, dict) and now.get("id") == item_id:
+                try:
+                    return max(0.0, float(now.get("position_s") or 0.0))
+                except (TypeError, ValueError):
+                    return 0.0
+            return 0.0
+
+    def _sync_stem_position(self, player: StemPlayer, item_id: str,
+                            finished: bool, block=None) -> bool:
+        """Mirror a stem player's position into `now_playing`.
+
+        `finished` comes from the driver (end of song with no loop); a loop
+        wraps inside the player so it never finishes. Returns True when the
+        driver should exit (finished or superseded).
+        """
+        with self._lock:
+            now = self._state.get("now_playing")
+            if now is None or now.get("id") != item_id:
+                return True  # superseded or stopped; let the driver exit
+            if finished:
+                self._state["now_playing"] = None
+                if self._player is player:
+                    self._player = None
+            else:
+                try:
+                    position = max(0.0, float(player.position_s))
+                except Exception:
+                    position = float(now.get("position_s") or 0.0)
+                self._state["now_playing"] = {**now,
+                                              "position_s": position}
+                if block is not None:
+                    self._state["meters"] = {
+                        "in_db": MIN_DB,
+                        "out_db": _db(np.asarray(block))}
+            return finished
 
     def _advance_playback(self, delta_s: float, loop: bool,
                           item_id: str, block=None) -> bool:
@@ -1140,7 +1509,8 @@ class _PanelHandler(BaseHTTPRequestHandler):
         panel: ControlPanel = self.server.panel  # type: ignore[attr-defined]
         if path not in ("/api/config", "/api/start", "/api/stop",
                         "/api/queue/add", "/api/queue/remove",
-                        "/api/queue/run", "/api/queue/play", "/api/queue/stop"):
+                        "/api/queue/run", "/api/queue/play", "/api/queue/stop",
+                        "/api/playback", "/api/panic"):
             self._json(404, {"error": "ไม่พบเส้นทางนี้ (404)"})
             return
         fail, body = self._read_json_body()
@@ -1161,6 +1531,10 @@ class _PanelHandler(BaseHTTPRequestHandler):
             code, obj = panel.api_queue_run()
         elif path == "/api/queue/play":
             code, obj = panel.api_queue_play(body)
+        elif path == "/api/playback":
+            code, obj = panel.api_playback(body)
+        elif path == "/api/panic":
+            code, obj = panel.api_panic()
         else:
             code, obj = panel.api_queue_stop()
         self._json(code, obj)
@@ -1184,6 +1558,7 @@ class _PanelHandler(BaseHTTPRequestHandler):
                     "latency_ms": st["latency_ms"],
                     "now_playing": st.get("now_playing"),
                     "queue_count": len(st.get("queue", [])),
+                    "stems": st.get("stems"),
                     "range_fit": st.get("range_fit"),
                     "profile": st.get("profile"),
                 }

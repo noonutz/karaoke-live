@@ -152,6 +152,46 @@ input[type="range"]{width:100%; max-width:100%; min-height:44px; margin:0; accen
 .latency{display:flex; align-items:center; gap:8px; margin-top:10px; color:var(--fg); font-size:.9rem; font-variant-numeric:tabular-nums}
 .latency svg{flex:none; color:var(--muted-fg)}
 .latency .en{color:var(--muted-fg)}
+/* panic: red outline, next to the queue button */
+.panic-btn{
+  display:inline-flex; align-items:center; gap:8px;
+  padding:6px 14px; border-radius:999px; font-weight:700; font-size:.95rem;
+  background:transparent; color:var(--danger); border:1px solid var(--danger);
+  min-height:44px; cursor:pointer;
+  transition:background .18s var(--ease),filter .18s var(--ease);
+}
+.panic-btn:hover{background:rgba(248,113,113,.12)}
+.panic-btn svg{flex:none}
+/* play-along row: two toggles + vocal slider, compact to keep 1280x800 flat */
+.sub-head.slim{margin:10px 0 8px}
+.play-with{display:flex; gap:8px}
+.play-with .tgl{
+  flex:1; min-height:44px; border-radius:10px; cursor:pointer;
+  border:1px solid var(--border); background:var(--bg); color:var(--fg);
+  font-weight:700; font-size:.95rem;
+  display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:6px 8px;
+  transition:background .18s var(--ease),border-color .18s var(--ease),transform .1s var(--ease);
+}
+.play-with .tgl:hover{border-color:var(--muted-fg)}
+.play-with .tgl:active{transform:scale(.98)}
+.play-with .tgl svg{flex:none}
+.play-with .tgl[aria-pressed="true"]{background:var(--accent); color:var(--on-accent); border-color:var(--accent)}
+.play-with .tgl:disabled{opacity:.32; cursor:not-allowed; filter:grayscale(.55)}
+.play-with .tgl:disabled:hover{border-color:var(--border)}
+.stem-vocal-row input:disabled{opacity:.35; cursor:not-allowed; filter:grayscale(.55)}
+#stemHint{margin:-2px 0 8px; color:var(--warn)}
+.loop-range{
+  font-size:.8rem; color:var(--fg-70); text-align:center;
+  font-variant-numeric:tabular-nums; min-height:0; margin-top:2px;
+}
+.loop-range:empty{display:none}
+.loop-range.show{min-height:1.25em}
+.stem-vocal-row{display:flex; align-items:center; gap:10px; margin-top:6px}
+.stem-vocal-row label{margin:0; font-weight:600; white-space:nowrap}
+.stem-vocal-row input{flex:1; min-width:0}
+.stem-vocal-row input:disabled{opacity:.55; cursor:not-allowed}
+.stem-val{font-weight:700; font-variant-numeric:tabular-nums; white-space:nowrap}
+.play-hint{font-size:.85rem; color:var(--fg-70); margin-top:2px}
 .key-big{font-size:2.75rem; font-weight:800; line-height:1.1; margin:4px 0 2px}
 .key-big.empty{color:var(--muted-fg); font-size:1.5rem; font-weight:600}
 .key-sub{color:var(--fg-70); margin-bottom:10px}
@@ -332,6 +372,10 @@ body.queue-open{overflow:hidden}
       <span>คิวเพลง</span>
       <span class="queue-badge" id="queueCount" hidden>0</span>
     </button>
+    <button type="button" class="panic-btn" id="btnPanic" aria-label="หยุดเสียงทั้งหมด">
+      <svg width="20" height="20" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M200,40H56A16,16,0,0,0,40,56V200a16,16,0,0,0,16,16H200a16,16,0,0,0,16-16V56A16,16,0,0,0,200,40Zm0,160H56V56H200V200Z"/></svg>
+      <span>เงียบ</span>
+    </button>
     <div id="status" class="pill ready" role="status" aria-live="polite">
       <span class="dot" aria-hidden="true"></span><svg class="wave" width="20" height="20" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M239.24,131.4c-22,46.8-41.4,68.6-61.2,68.6-25.1,0-40.73-33.32-57.28-68.6C107.7,103.56,92.9,72,78,72c-16.4,0-36.31,37.21-46.72,59.4a8,8,0,0,1-14.48-6.8C38.71,77.8,58.16,56,78,56c25.1,0,40.73,33.32,57.28,68.6C148.3,152.44,163.1,184,178,184c16.4,0,36.31-37.21,46.72-59.4a8,8,0,0,1,14.48,6.8Z"/></svg><span id="statusText">พร้อม</span>
     </div>
@@ -414,6 +458,25 @@ body.queue-open{overflow:hidden}
       <span class="db"><span id="dbOut">-90</span> <span class="unit">dB</span></span>
     </div>
     <div class="meter-scale" aria-hidden="true"><span>-90</span><span>-60</span><span>-30</span><span>0 dB</span></div>
+    <div class="sub-head slim"><svg width="20" height="20" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M212.92,17.69a8,8,0,0,0-6.86-1.45l-128,32A8,8,0,0,0,72,56V166.08A36,36,0,1,0,88,196V110.25l112-28v51.83A36,36,0,1,0,216,164V24A8,8,0,0,0,212.92,17.69ZM52,216a20,20,0,1,1,20-20A20,20,0,0,1,52,216ZM88,93.75V62.25l112-28v31.5ZM180,184a20,20,0,1,1,20-20A20,20,0,0,1,180,184Z"/></svg><span>เล่นกับเพลง <span class="en" lang="en">(play along)</span></span></div>
+    <div class="play-with">
+      <button type="button" class="tgl" id="btnDrums" aria-pressed="false" disabled>
+        <svg width="20" height="20" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M128,48c-52.9,0-96,14.3-96,32s43.1,32,96,32,96-14.3,96-32S180.9,48,128,48Zm0,48c-46.3,0-80-11.5-80-16s33.7-16,80-16,80,11.5,80,16S174.3,96,128,96Z"/><path d="M40,112v48c0,17.7,43.1,32,96,32s96-14.3,96-32V112c-14.9,13.4-52.4,24-96,24S54.9,125.4,40,112Z" opacity=".65"/></svg>
+        <span>ตัดกลอง</span>
+      </button>
+      <button type="button" class="tgl" id="btnLoop" aria-pressed="false" disabled>
+        <svg width="20" height="20" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M128,24A104,104,0,1,0,232,128a8,8,0,0,1-16,0,88,88,0,1,1-26.94-63.06L168,85.66V48a8,8,0,0,1,16,0V96a8,8,0,0,1-8,8H136a8,8,0,0,1,0-16h26.34L146.06,71.72A87.65,87.65,0,0,0,128,40,88,88,0,0,1,128,24Z"/></svg>
+        <span>วน 4 ห้อง</span>
+      </button>
+    </div>
+    <div class="loop-range" id="loopRange" aria-live="polite"></div>
+    <div class="play-hint" id="stemHint">ต้องเล่นเพลงที่แยกสเต็มแล้วก่อน (คิวเพลง → แยกเสียงเพลงที่รอ)</div>
+    <div class="stem-vocal-row">
+      <label for="vocalStem">เสียงร้อง</label>
+      <input type="range" id="vocalStem" min="0" max="100" step="1" value="100" disabled aria-valuetext="100 เปอร์เซ็นต์">
+      <span class="stem-val"><span id="vocalStemVal">100</span>%</span>
+    </div>
+    <div class="play-hint">0 = คาราโอเกะ · 50 = ร้องประสาน · 100 = ต้นฉบับเต็ม</div>
     <div class="transport">
       <button type="button" class="btn btn-start" id="btnStart">
         <svg width="20" height="20" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M232.4,114.49,88.32,26.35a16,16,0,0,0-16.2-.3A15.86,15.86,0,0,0,64,39.87V216.13A15.94,15.94,0,0,0,80,232a16.07,16.07,0,0,0,8.36-2.35L232.4,141.51a15.81,15.81,0,0,0,0-27ZM80,215.94V40l143.83,88Z"/></svg>
@@ -475,7 +538,7 @@ body.queue-open{overflow:hidden}
 </aside>
 
 <div id="hint-live" style="display:none"></div>
-<footer>karaoke-live · แผงควบคุมบนเครื่อง (localhost เท่านั้น) · กด <kbd>Space</kbd> เพื่อเริ่ม/หยุด</footer>
+<footer>karaoke-live · แผงควบคุมบนเครื่อง (localhost เท่านั้น) · กด <kbd>Space</kbd> เพื่อเริ่ม/หยุด · <kbd>Esc</kbd> เงียบ</footer>
 
 <script>
 "use strict";
@@ -500,7 +563,10 @@ const els = {
   btnQueueClose: $("btnQueueClose"), queueTitle: $("queueTitle"),
   queueSource: $("queueSource"), btnQueueAdd: $("btnQueueAdd"),
   btnQueueRun: $("btnQueueRun"), queueList: $("queueList"),
-  queueEmpty: $("queueEmpty"),
+  queueEmpty: $("queueEmpty"), btnPanic: $("btnPanic"),
+  btnDrums: $("btnDrums"), btnLoop: $("btnLoop"),
+  loopRange: $("loopRange"), vocalStem: $("vocalStem"),
+  vocalStemVal: $("vocalStemVal"), stemHint: $("stemHint"),
 };
 els.chromaBars.innerHTML = "";
 for (let i = 0; i < 12; i++) {
@@ -549,6 +615,7 @@ const CIRC = 2 * Math.PI * 56;
 let running = false, peakInDb = -90, peakOutDb = -90, keyUpdatedAt = null;
 let queueItems = [], nowPlaying = null, queueOpen = false, lastQueueFocus = null;
 let vocalTimer = null, es = null, esRetry = null;
+let stemState = { drums: 1, vocals: 1, loop_bars: 0 }, stemSliderTimer = null;
 let peakInFade = null, peakOutFade = null;
 
 function showError(msg) {
@@ -591,6 +658,7 @@ function applyState(s) {
   els.btnStop.disabled = !running;
   if (Array.isArray(s.queue)) queueItems = s.queue;
   if (Object.prototype.hasOwnProperty.call(s, "now_playing")) nowPlaying = s.now_playing;
+  if (Object.prototype.hasOwnProperty.call(s, "stems")) paintStems(s.stems);
   if (Object.prototype.hasOwnProperty.call(s, "range_fit")) paintRange(s.range_fit, s.profile);
   paintQueue();
   setStatus();
@@ -752,6 +820,47 @@ async function toggle() {
   } else showError(null);
   applyState(body.state || body);
 }
+function paintStems(st) {
+  const avail = !!(st && st.available);
+  els.btnDrums.disabled = !avail;
+  els.btnLoop.disabled = !avail;
+  els.vocalStem.disabled = !avail;
+  if (els.stemHint) els.stemHint.hidden = avail;
+  const drums = (st && typeof st.drums === "number") ? st.drums : 1;
+  const vocals = (st && typeof st.vocals === "number") ? st.vocals : 1;
+  const loop = (st && st.loop) || null;
+  const loopOn = !!(loop && loop.active);
+  stemState = { drums, vocals, loop_bars: loopOn ? (Number(loop.bars) || 4) : 0 };
+  els.btnDrums.setAttribute("aria-pressed", String(drums === 0));
+  els.btnLoop.setAttribute("aria-pressed", String(loopOn));
+  if (loopOn) {
+    els.loopRange.textContent = fmtDuration(loop.start_s) + " – " + fmtDuration(loop.end_s);
+    els.loopRange.classList.add("show");
+  } else {
+    els.loopRange.textContent = "";
+    els.loopRange.classList.remove("show");
+  }
+  const pct = Math.round(vocals * 100);
+  els.vocalStem.value = String(pct);
+  els.vocalStemVal.textContent = String(pct);
+  els.vocalStem.setAttribute("aria-valuetext", pct + " เปอร์เซ็นต์");
+}
+async function postPlayback() {
+  const { ok, status, body } = await api("/api/playback", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(stemState),
+  });
+  if (!ok) showError(body.error || ("สั่งเล่นกับเพลงไม่ได้ (HTTP " + status + ")"));
+  else { showError(null); paintStems(body); }
+}
+async function panic() {
+  showError(null);
+  closeQueue();
+  const { ok, status, body } = await api("/api/panic", { method: "POST" });
+  if (!ok) showError(body.error || ("หยุดเสียงทั้งหมดไม่ได้ (HTTP " + status + ")"));
+  else showError(null);
+  applyState(body);
+}
 
 els.capture.addEventListener("change", () => postConfig({ capture: els.capture.value }));
 els.output.addEventListener("change", () => postConfig({ output: els.output.value }));
@@ -764,6 +873,25 @@ els.vocal.addEventListener("input", () => {
   clearTimeout(vocalTimer);
   vocalTimer = setTimeout(() => postConfig({ vocal_level: pct / 100 }), 250);
 });
+els.btnDrums.addEventListener("click", () => {
+  stemState.drums = stemState.drums === 0 ? 1 : 0;
+  postPlayback();
+});
+els.btnLoop.addEventListener("click", () => {
+  stemState.loop_bars = stemState.loop_bars ? 0 : 4;
+  postPlayback();
+});
+els.vocalStem.addEventListener("input", () => {
+  const pct = Math.max(0, Math.min(100, Number(els.vocalStem.value) || 0));
+  els.vocalStemVal.textContent = String(pct);
+  els.vocalStem.setAttribute("aria-valuetext", pct + " เปอร์เซ็นต์");
+  clearTimeout(stemSliderTimer);
+  stemSliderTimer = setTimeout(() => {
+    stemState.vocals = pct / 100;
+    postPlayback();
+  }, 250);
+});
+els.btnPanic.addEventListener("click", panic);
 els.btnStart.addEventListener("click", toggle);
 els.btnStop.addEventListener("click", toggle);
 const QUEUE_STATUS_TH = { pending: "รอคิว", rendering: "กำลังแยก", ready: "พร้อม", failed: "ผิดพลาด" };
@@ -976,6 +1104,7 @@ els.btnQueue.addEventListener("keydown", (e) => {
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && queueOpen) { e.preventDefault(); closeQueue(); return; }
+  if (e.key === "Escape" && !queueOpen) { e.preventDefault(); panic(); return; }
   if (e.code !== "Space" || e.repeat) return;
   const t = e.target;
   const tag = (t && t.tagName) || "";
@@ -1001,6 +1130,10 @@ function connectEvents() {
     if (Object.prototype.hasOwnProperty.call(d, "now_playing")) {
       nowPlaying = d.now_playing;
       paintQueue();
+    }
+    if (Object.prototype.hasOwnProperty.call(d, "stems")
+        && document.activeElement !== els.vocalStem) {
+      paintStems(d.stems);
     }
     if (typeof d.queue_count === "number" && d.queue_count !== queueItems.length) {
       refreshQueue();

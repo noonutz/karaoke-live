@@ -10,9 +10,34 @@ import tempfile
 import unittest
 import urllib.error
 import urllib.request
+from pathlib import Path
 
+import numpy as np
+
+from karaokelive import audio_io
 from karaokelive.setlist import Setlist
-from karaokelive.ui import ControlPanel
+from karaokelive.ui import (
+    ControlPanel,
+    _bar_seconds,
+    _snap_loop,
+)
+
+
+def _make_stem_wavs(directory: str, seconds: float = 8.0) -> dict:
+    """Four short stereo WAVs (one per stem) for playback tests."""
+    sample_rate = 48000
+    n = int(sample_rate * seconds)
+    t = np.arange(n, dtype=np.float64) / sample_rate
+    freqs = {"vocals": 440.0, "drums": 220.0,
+             "bass": 110.0, "other": 330.0}
+    paths = {}
+    for stem, freq in freqs.items():
+        tone = 0.3 * np.sin(2 * np.pi * freq * t)
+        data = np.stack([tone, tone], axis=1).astype(np.float32)
+        path = str(Path(directory) / f"{stem}.wav")
+        audio_io.save(path, data, sample_rate)
+        paths[stem] = path
+    return paths
 
 
 def _get(base: str, path: str):
@@ -324,6 +349,111 @@ class PanelTests(unittest.TestCase):
         self.assertIn(code, (200, 409))
         if code == 409:
             self.assertRegex(body["error"], r"[ก-๙]")
+
+
+class PlaybackTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.setlist = Setlist(
+            path=f"{self._tmp.name}/setlist.json")
+        self.panel = ControlPanel(port=0, demo=True,
+                                  setlist=self.setlist).start_in_background()
+        self.base = f"http://127.0.0.1:{self.panel.bound_port}"
+        self.stem_paths = _make_stem_wavs(self._tmp.name)
+
+    def tearDown(self):
+        self.panel.shutdown()
+
+    def _queue_ready_stems(self, bpm=None):
+        status, body = _post(self.base, "/api/queue/add",
+                             {"source": self.stem_paths["vocals"]})
+        self.assertEqual(status, 200)
+        item_id = body["item"]["id"]
+        self.setlist.set_status(item_id, "ready",
+                                stems=dict(self.stem_paths), bpm=bpm)
+        return item_id
+
+    def _state(self):
+        status, _ctype, raw = _get(self.base, "/api/state")
+        self.assertEqual(status, 200)
+        return json.loads(raw.decode("utf-8"))
+
+    def test_bar_helpers(self):
+        self.assertEqual(_bar_seconds(120), 2.0)
+        self.assertEqual(_snap_loop(7.3, 120, 4), (4.0, 12.0))
+
+    def test_playback_without_stems_is_409(self):
+        status, body = _post(self.base, "/api/playback", {"drums": 0})
+        self.assertEqual(status, 409)
+        self.assertIn("error", body)
+        self.assertRegex(body["error"], r"[ก-๙]")
+        state = self._state()
+        self.assertIn("stems", state)
+        self.assertFalse(state["stems"]["available"])
+
+    def test_stem_play_and_mix(self):
+        item_id = self._queue_ready_stems(bpm=120.0)
+        status, body = _post(self.base, "/api/queue/play", {"id": item_id})
+        self.assertEqual(status, 200)
+        try:
+            state = self._state()
+            self.assertTrue(state["stems"]["available"])
+
+            status, body = _post(self.base, "/api/playback", {"drums": 0})
+            self.assertEqual(status, 200)
+            self.assertAlmostEqual(body["drums"], 0.0)
+            self.assertEqual(self._state()["stems"]["drums"], 0.0)
+
+            status, body = _post(
+                self.base, "/api/playback",
+                {"drums": 0.0, "vocals": 0.5, "loop_bars": 4})
+            self.assertEqual(status, 200)
+            loop = body["loop"]
+            self.assertTrue(loop["active"])
+            self.assertEqual(loop["bars"], 4)
+            self.assertAlmostEqual(loop["end_s"] - loop["start_s"], 8.0)
+
+            status, body = _post(
+                self.base, "/api/playback",
+                {"drums": 1.0, "vocals": 1.0, "loop_bars": 0})
+            self.assertEqual(status, 200)
+            self.assertIsNone(body["loop"])
+        finally:
+            _post(self.base, "/api/queue/stop", {})
+
+    def test_loop_without_bpm_is_400(self):
+        item_id = self._queue_ready_stems(bpm=None)
+        status, _body = _post(self.base, "/api/queue/play", {"id": item_id})
+        self.assertEqual(status, 200)
+        try:
+            status, body = _post(
+                self.base, "/api/playback",
+                {"drums": 1.0, "vocals": 1.0, "loop_bars": 4})
+            self.assertEqual(status, 400)
+            self.assertRegex(body["error"], r"[ก-๙]")
+        finally:
+            _post(self.base, "/api/queue/stop", {})
+
+    def test_panic(self):
+        item_id = self._queue_ready_stems(bpm=120.0)
+        status, _body = _post(self.base, "/api/queue/play", {"id": item_id})
+        self.assertEqual(status, 200)
+        status, body = _post(self.base, "/api/start", {})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["running"])
+
+        status, body = _post(self.base, "/api/panic", {})
+        self.assertEqual(status, 200)
+        state = self._state()
+        self.assertFalse(state["running"])
+        self.assertIsNone(state["now_playing"])
+        self.assertIsNone(state["error"])
+
+        # The panel starts again immediately afterwards.
+        status, body = _post(self.base, "/api/start", {})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["running"])
 
 
 if __name__ == "__main__":
