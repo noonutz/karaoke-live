@@ -65,6 +65,12 @@ def _stable_id(source: str) -> str:
     return hashlib.sha256(source.encode("utf-8")).hexdigest()[:8]
 
 
+def _copy_item(item: Item) -> Item:
+    """A copy safe to hand out: the `stems` dict is copied too."""
+    return replace(item,
+                   stems=dict(item.stems) if item.stems is not None else None)
+
+
 @dataclass
 class Item:
     """One queued source."""
@@ -73,6 +79,8 @@ class Item:
     source: str  # absolute path, or a URL exactly as given
     status: str = "pending"  # one of STATUSES
     instrumental: str | None = None  # rendered output path, once ready
+    stems: dict[str, str] | None = None  # 4-stem paths, once ready
+    bpm: float | None = None  # probed tempo, once rendered
     error: str | None = None  # failure reason, once failed
     added_at: float = field(default_factory=time.time)
     duration_s: float | None = None  # probed at add time, None when unknown
@@ -109,7 +117,7 @@ class Setlist:
             )
             self._items.append(item)
             self._write_locked()
-            return replace(item)
+            return _copy_item(item)
 
     @staticmethod
     def _probe_duration(source: str) -> float | None:
@@ -133,14 +141,14 @@ class Setlist:
     def items(self) -> list[Item]:
         """All items, oldest first; copies, so mutating them is harmless."""
         with self._lock:
-            return [replace(item) for item in self._items]
+            return [_copy_item(item) for item in self._items]
 
     def get(self, id: str) -> Item | None:
         """One item by id, or `None`; a copy."""
         with self._lock:
             for item in self._items:
                 if item.id == id:
-                    return replace(item)
+                    return _copy_item(item)
             return None
 
     def next_pending(self) -> Item | None:
@@ -149,23 +157,33 @@ class Setlist:
             pending = [item for item in self._items if item.status == "pending"]
             if not pending:
                 return None
-            return replace(min(pending, key=lambda item: item.added_at))
+            return _copy_item(min(pending, key=lambda item: item.added_at))
 
     def set_status(self, id: str, status: str,
                    instrumental: str | None = None,
-                   error: str | None = None) -> Item:
-        """Move an item to `status`; unknown ids raise `KeyError`."""
+                   error: str | None = None,
+                   stems: dict[str, str] | None = None,
+                   bpm: float | None = None) -> Item:
+        """Move an item to `status`; unknown ids raise `KeyError`.
+
+        Fields not passed reset to `None` (so a 4-stem `ready` mark clears
+        any legacy `instrumental` and vice versa); `instrumental` keeps its
+        2-stem meaning for already-rendered items.
+        """
         if status not in STATUSES:
             raise ValueError(f"bad status {status!r} "
                              f"(choose from {', '.join(STATUSES)})")
         with self._lock:
             for index, item in enumerate(self._items):
                 if item.id == id:
-                    updated = replace(item, status=status,
-                                      instrumental=instrumental, error=error)
+                    updated = replace(
+                        item, status=status,
+                        instrumental=instrumental, error=error,
+                        stems=(dict(stems) if stems is not None else None),
+                        bpm=bpm)
                     self._items[index] = updated
                     self._write_locked()
-                    return replace(updated)
+                    return _copy_item(updated)
             raise KeyError(f"unknown queue id: {id}")
 
     def clear(self, status: str | None = None) -> int:

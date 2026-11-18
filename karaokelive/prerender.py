@@ -1,4 +1,4 @@
-"""Offline pre-rendering: separate vocals with the demucs CLI in a subprocess.
+"""Offline pre-rendering: separate stems with the demucs CLI in a subprocess.
 
 Torch is never imported here -- everything demucs-related runs in
 `sys.executable -m demucs.separate`, so the calling process stays light and a
@@ -11,25 +11,36 @@ import sys
 import threading
 from pathlib import Path
 
+from . import audio_io
+from . import tempo
 from .setlist import Setlist
 
 _ERROR_TAIL_LINES = 20
 _ERROR_MAX_CHARS = 300
 
+#: The four stems demucs writes per track.
+STEMS = ("vocals", "drums", "bass", "other")
+
 
 def separate_file(source: str, out_dir: str, model: str = "htdemucs",
-                  timeout: float = 3600.0) -> str:
-    """Separate `source` and return the written `no_vocals.*` path.
+                  timeout: float = 3600.0) -> dict[str, str]:
+    """Separate `source` into four stems and return `{stem: path}`.
+
+    Runs demucs **without** `--two-stems`, so it writes `vocals.wav`,
+    `drums.wav`, `bass.wav` and `other.wav` under
+    `<out_dir>/<model>/<track name>/`, and returns a dict of those four
+    absolute paths.
 
     Raises `RuntimeError` (carrying the last 20 lines of stderr) when demucs
-    is missing or the separation fails, or a Thai `RuntimeError` naming the
-    model and the file when demucs takes longer than `timeout` seconds.
+    is missing or the separation fails, a Thai `RuntimeError` naming the
+    model and the file when demucs takes longer than `timeout` seconds, and
+    a Thai `RuntimeError` when any of the four stems is missing afterwards.
+    No extra mix files are written -- the player mixes at playback time.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    before = set(out.rglob("no_vocals.*"))
     cmd = [sys.executable, "-m", "demucs.separate",
-           "--two-stems", "vocals", "-n", model,
+           "-n", model,
            "-o", str(out), str(source)]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True,
@@ -44,20 +55,45 @@ def separate_file(source: str, out_dir: str, model: str = "htdemucs",
         tail = (proc.stderr or "").strip().splitlines()[-_ERROR_TAIL_LINES:]
         detail = "\n".join(tail) if tail else f"exit code {proc.returncode}"
         raise RuntimeError(f"demucs failed (exit {proc.returncode}):\n{detail}")
-    fresh = [p for p in out.rglob("no_vocals.*") if p not in before]
-    if not fresh:
-        fresh = list(out.rglob("no_vocals.*"))
-    if not fresh:
-        raise RuntimeError(f"demucs finished but wrote no no_vocals file in {out}")
-    return str(max(fresh, key=lambda p: p.stat().st_mtime))
+    track = Path(source).stem or Path(source).name
+    roots = [out / model / track]
+    if not roots[0].is_dir():
+        roots = [p for p in out.rglob(track) if p.is_dir()]
+    stems: dict[str, str] = {}
+    for stem in STEMS:
+        found = next((p for root in roots
+                      for p in root.glob(f"{stem}.*")), None)
+        if found is None or not found.is_file():
+            raise RuntimeError(
+                f"แยกเสียงไม่สมบูรณ์ — ไม่พบสเต็ม {stem} ของโมเดล {model} "
+                f"ไฟล์ {source} ใน {out}")
+        stems[stem] = str(found.resolve())
+    return stems
+
+
+def detect_bpm(source: str) -> float | None:
+    """Probe `source` for its BPM; `None` when probing fails.
+
+    Decodes at 22050 Hz mono via `audio_io.load` to keep
+    `tempo.detect_tempo` fast, and rounds to one decimal. Never raises.
+    """
+    try:
+        audio = audio_io.load(source, sample_rate=22050, channels=1)
+        if audio.size == 0:
+            return None
+        return round(float(tempo.detect_tempo(audio, 22050).bpm), 1)
+    except Exception:
+        return None
 
 
 class PrerenderWorker(threading.Thread):
     """Drain a `Setlist` in the background, one item at a time, newest last.
 
-    `separator` is `(source, out_dir) -> instrumental path` and defaults to
-    `separate_file`; pass a stub in tests. Failed items stay failed (no
-    retries) until the user re-adds them.
+    `separator` is `(source, out_dir) -> stems dict or instrumental path`
+    and defaults to `separate_file`; pass a stub in tests. A dict result is
+    stored as 4-stem `stems` (plus a probed `bpm`, never failing the render);
+    a plain string result is stored as the legacy 2-stem `instrumental`
+    path. Failed items stay failed (no retries) until the user re-adds them.
     """
 
     def __init__(self, setlist: Setlist, out_dir: str | Path,
@@ -85,12 +121,16 @@ class PrerenderWorker(threading.Thread):
             except KeyError:
                 continue  # removed while we were looking
             try:
-                instrumental = self.separator(item.source, self.out_dir)
+                result = self.separator(item.source, self.out_dir)
             except Exception as exc:  # every failure becomes a failed item
                 message = str(exc) or type(exc).__name__
                 self._mark(item.id, "failed", error=message[:_ERROR_MAX_CHARS])
                 continue
-            self._mark(item.id, "ready", instrumental=str(instrumental))
+            if isinstance(result, dict):
+                self._mark(item.id, "ready",
+                           stems=result, bpm=detect_bpm(item.source))
+            else:  # legacy 2-stem separator returning a plain path
+                self._mark(item.id, "ready", instrumental=str(result))
 
     def _mark(self, id: str, status: str, **kwargs) -> None:
         try:
@@ -104,4 +144,4 @@ class PrerenderWorker(threading.Thread):
         self.join(timeout=timeout)
 
 
-__all__ = ["PrerenderWorker", "separate_file"]
+__all__ = ["STEMS", "PrerenderWorker", "detect_bpm", "separate_file"]

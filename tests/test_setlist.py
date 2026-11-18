@@ -89,6 +89,39 @@ class SetlistTests(unittest.TestCase):
         self.assertEqual(back.status, "ready")
         self.assertEqual(back.instrumental, "/out/no_vocals.wav")
 
+    def test_stems_and_bpm_roundtrip(self):
+        sl1 = self.make()
+        item = sl1.add("/music/b.mp3")
+        stems = {stem: f"/out/{stem}.wav"
+                 for stem in ("vocals", "drums", "bass", "other")}
+        sl1.set_status(item.id, "ready", stems=stems, bpm=128.0)
+        sl2 = Setlist(path=self.path)
+        back = sl2.get(item.id)
+        self.assertEqual(back.status, "ready")
+        self.assertEqual(back.stems, stems)
+        self.assertEqual(back.bpm, 128.0)
+        self.assertIsNone(back.instrumental)
+        # The handed-out dict is a copy: mutating it is harmless.
+        back.stems["vocals"] = "mutated"
+        self.assertEqual(sl2.get(item.id).stems["vocals"], "/out/vocals.wav")
+        data = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(data[0]["stems"], stems)
+        self.assertEqual(data[0]["bpm"], 128.0)
+
+    def test_old_json_without_stems_still_loads(self):
+        sl1 = self.make()
+        sl1.add("/music/c.mp3")
+        data = json.loads(self.path.read_text(encoding="utf-8"))
+        for entry in data:
+            entry.pop("stems", None)
+            entry.pop("bpm", None)
+        self.path.write_text(json.dumps(data), encoding="utf-8")
+        back = Setlist(path=self.path).get(sl1.items()[0].id)
+        self.assertIsNotNone(back)
+        self.assertIsNone(back.stems)
+        self.assertIsNone(back.bpm)
+        self.assertIsNone(back.instrumental)
+
     def test_atomic_write_leaves_no_tmp(self):
         sl = self.make()
         for i in range(3):
