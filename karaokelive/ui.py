@@ -360,6 +360,7 @@ class ControlPanel:
         self._server_thread: threading.Thread | None = None
         self._worker: threading.Thread | None = None
         self._stop_event = threading.Event()
+        self._engine_failures = 0
         self._in_dev: int | None = None
         self._out_dev: int | None = None
 
@@ -417,6 +418,22 @@ class ControlPanel:
         with self._lock:
             self._state["error"] = message
             self._state["running"] = False
+
+    def _engine_failure(self, exc: BaseException) -> None:
+        """Record one failed `engine.process` call.
+
+        Fires `self._fail(...)` (and requests a stream stop) only on the 5th
+        consecutive failure, so a transient glitch does not kill the run while
+        a persistent torch/demucs error cannot stay silent forever.
+        """
+        self._engine_failures += 1
+        if self._engine_failures >= 5:
+            reason = str(exc) or repr(exc)
+            self._fail(f"แยกเสียงไม่สำเร็จ: {reason} — หยุดเล่นแล้ว")
+            self._stop_event.set()
+
+    def _engine_ok(self) -> None:
+        self._engine_failures = 0
 
     def device_lists(self) -> dict:
         """Split the device table into capture/playback candidates."""
@@ -534,6 +551,7 @@ class ControlPanel:
                 msg = f"เปิดเสียงสดไม่ได้ ({exc})"
                 self._fail(msg)
                 return 400, {"error": msg, "devices": self.device_lists()}
+        self._engine_failures = 0  # per-run counter (see _engine_failure)
         with self._lock:
             self._state.update({
                 "running": True,
@@ -667,7 +685,8 @@ class ControlPanel:
 
     def api_queue_stop(self) -> tuple[int, dict]:
         """Stop file playback; `now_playing` becomes null."""
-        player, self._player = self._player, None
+        with self._lock:
+            player, self._player = self._player, None
         if player is not None:
             try:
                 player.stop()
@@ -712,7 +731,13 @@ class ControlPanel:
             if ended:
                 self._state["now_playing"] = None
         if ended:
-            player, self._player = self._player, None
+            with self._lock:
+                player = self._player
+                if player is None or player.item_id != item_id:
+                    # Superseded: another song started after this block was
+                    # queued; leave the new player alone.
+                    return ended
+                self._player = None
             if player is not None:
                 try:
                     player.stop()
@@ -766,6 +791,9 @@ class ControlPanel:
                 "ไม่พบ sounddevice: ติดตั้งด้วย pip install sounddevice"
             ) from exc
         engine = self._build_engine()
+        # Reset engine state so a second run never starts with a biquad tail
+        # or a half-filled demucs buffer (a no-op for a fresh engine).
+        engine.reset()
         assert self._in_dev is not None and self._out_dev is not None
         self._set(latency_ms=(engine.latency_frames + BLOCKSIZE)
                   / SAMPLE_RATE * 1000.0)
@@ -777,7 +805,9 @@ class ControlPanel:
                 block = np.asarray(indata, dtype=np.float32)
                 try:
                     out = np.asarray(engine.process(block), dtype=np.float32)
-                except Exception:
+                    self._engine_ok()
+                except Exception as exc:
+                    self._engine_failure(exc)
                     out = np.zeros_like(block)
                 if out.shape[0] < frames:
                     pad = np.zeros((frames - out.shape[0], out.shape[1]),
@@ -795,9 +825,11 @@ class ControlPanel:
 
         # Engines with lookahead (demucs): rings + engine worker, mirroring
         # LiveRouter's threaded path; the audio callback only copies.
-        ring_in = realtime.Ring(BLOCKSIZE * 32)
-        ring_out = realtime.Ring(BLOCKSIZE * 32)
-        ring_out.write(np.zeros((engine.latency_frames, 2), np.float32))
+        ring_in = realtime.Ring.for_engine(engine, BLOCKSIZE)
+        ring_out = realtime.Ring.for_engine(engine, BLOCKSIZE)
+        # No prefill: the delayed engine already returns latency_frames of
+        # silence at the head of its own output, so prefilling would add the
+        # delay twice.
         stop = self._stop_event
 
         def threaded_callback(indata, outdata, frames, _time_info, _status):
@@ -814,7 +846,9 @@ class ControlPanel:
                     blk, _ = ring_in.read(BLOCKSIZE)
                     try:
                         out = engine.process(blk)
-                    except Exception:
+                        self._engine_ok()
+                    except Exception as exc:
+                        self._engine_failure(exc)
                         out = np.zeros_like(blk)
                     ring_out.write(np.asarray(out, dtype=np.float32))
                 else:

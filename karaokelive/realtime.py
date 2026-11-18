@@ -5,9 +5,10 @@ Two paths:
 * `latency_frames == 0` engines (center, channel) run inside the audio
   callback. Nothing to queue, nothing to drift.
 * engines that need context (demucs) run in a worker thread behind a ring
-  buffer; the callback only copies. The output ring is pre-filled with the
-  engine's latency in silence so the graph starts aligned, and a starved
-  callback emits silence (counted as an underrun) rather than stale audio.
+  buffer sized with `Ring.for_engine`; the callback only copies. The engine's
+  own output already starts with `latency_frames` of silence, so no prefill is
+  written, and a starved callback emits silence (counted as an underrun)
+  rather than stale audio.
 
 Device selection is by case-insensitive name substring, which is what virtual
 cables need: "BlackHole 2ch" on macOS, "CABLE Input" on Windows.
@@ -85,6 +86,12 @@ def find_device(query: str, want_input: bool) -> int:
 class Ring:
     """Single-producer/single-consumer frame ring."""
 
+    @classmethod
+    def for_engine(cls, engine: Engine, blocksize: int,
+                   slack_blocks: int = 32) -> "Ring":
+        """Capacity for a delayed engine's ring: latency + `slack_blocks`."""
+        return cls(engine.latency_frames + blocksize * slack_blocks)
+
     def __init__(self, capacity_frames: int, channels: int = 2):
         self.capacity = int(capacity_frames)
         self.buf = np.zeros((self.capacity, channels), dtype=np.float32)
@@ -145,6 +152,9 @@ class LiveRouter:
             print(msg, flush=True)
 
     def run(self, seconds: float | None = None) -> None:
+        # Reset engine state so a reused engine never starts a run with a
+        # biquad tail or a half-filled demucs buffer from the previous run.
+        self.engine.reset()
         sd = _sd()
         in_dev = find_device(self.capture_query, want_input=True)
         out_dev = find_device(self.playback_query, want_input=False)
@@ -163,9 +173,11 @@ class LiveRouter:
             self._run_stream(stream, seconds)
             return
 
-        self._ring_in = Ring(self.blocksize * 32)
-        self._ring_out = Ring(self.blocksize * 32)
-        self._ring_out.write(np.zeros((self.engine.latency_frames, 2), np.float32))
+        self._ring_in = Ring.for_engine(self.engine, self.blocksize)
+        self._ring_out = Ring.for_engine(self.engine, self.blocksize)
+        # No prefill: the delayed engine already returns latency_frames of
+        # silence at the head of its own output, so prefilling would add the
+        # delay twice.
         worker = threading.Thread(target=self._worker, name="separator", daemon=True)
         worker.start()
         stream = sd.Stream(
