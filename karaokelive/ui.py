@@ -57,6 +57,7 @@ import numpy as np
 from . import audio_io, realtime
 from .engines import ENGINES, create_engine
 from .keydetect import RollingKeyDetector, estimate_chord
+from .mastering import Limiter
 from .prerender import PrerenderWorker
 from .range import Profile, estimate_range, fit_song, midi_to_name
 from .setlist import Setlist, default_state_dir
@@ -349,7 +350,8 @@ class FilePlayer:
         data = self._data
         total = len(data)
         idx = (self._pos + np.arange(frames)) % total
-        outdata[:] = data[idx]
+        outdata[:] = self._panel._limit_block(
+            np.asarray(data[idx], dtype=np.float32))
         self._pos = (self._pos + frames) % total
         try:
             self._panel._advance_playback(
@@ -455,7 +457,8 @@ class StemPlayback(StemPlayer):
             outdata.fill(0)
             return
         try:
-            data = self.read(frames)
+            data = self._panel._limit_block(
+                np.asarray(self.read(frames), dtype=np.float32))
         except Exception:
             outdata.fill(0)
             return
@@ -514,6 +517,10 @@ class ControlPanel:
         self.port = int(port)
         self.demo = bool(demo)
         self._lock = threading.Lock()
+        # One safety limiter per panel, reset on every run: every block that
+        # leaves toward a device (live engine output, file/stem playback)
+        # runs through it so OBS never sees more than 0 dBFS.
+        self._limiter = Limiter(SAMPLE_RATE)
         self._state: dict = {
             "capture": "",
             "output": "",
@@ -526,6 +533,7 @@ class ControlPanel:
             "error": None,
             "demo": self.demo,
             "meters": {"in_db": MIN_DB, "out_db": MIN_DB},
+            "limiter": {"gain_reduction_db": 0.0, "active": False},
             "key": _empty_key(),
             "tempo": None,
             "chord": None,
@@ -579,6 +587,23 @@ class ControlPanel:
         with self._lock:
             self._state["meters"] = {"in_db": float(in_db),
                                      "out_db": float(out_db)}
+            self._state["limiter"] = self._limiter_snapshot_locked()
+
+    def _limit_block(self, block: np.ndarray) -> np.ndarray:
+        """Run one output block through the panel limiter (zero latency)."""
+        return self._limiter.process(block)
+
+    def _limiter_snapshot_locked(self) -> dict:
+        """Fresh `state["limiter"]` block; caller must hold the lock.
+
+        `active` is True while the reduction is deeper than -0.1 dB.
+        """
+        try:
+            reduction = float(self._limiter.gain_reduction_db)
+        except Exception:
+            reduction = 0.0
+        return {"gain_reduction_db": reduction,
+                "active": bool(reduction < -0.1)}
 
     def _set_key_result(self, result) -> None:
         with self._lock:

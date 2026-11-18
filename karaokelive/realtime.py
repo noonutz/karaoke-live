@@ -22,6 +22,7 @@ from typing import Iterable
 import numpy as np
 
 from .engines.base import Engine
+from .mastering import Limiter
 
 
 def _sd():
@@ -157,6 +158,7 @@ class LiveRouter:
         self.verbose = verbose
         self.xruns = 0
         self.underruns = 0
+        self.limiter = Limiter(sample_rate)
         self.started = 0.0
         self._stop = threading.Event()
 
@@ -168,6 +170,7 @@ class LiveRouter:
         # Reset engine state so a reused engine never starts a run with a
         # biquad tail or a half-filled demucs buffer from the previous run.
         self.engine.reset()
+        self.limiter.reset()  # fresh gain per run, like the engine state
         sd = _sd()
         try:
             in_dev = find_device(self.capture_query, want_input=True)
@@ -242,7 +245,8 @@ class LiveRouter:
     def _inline_callback(self, indata, outdata, frames, _time_info, status):
         if status:
             self.xruns += 1
-        outdata[:] = self.engine.process(np.asarray(indata))
+        outdata[:] = self.limiter.process(
+            np.asarray(self.engine.process(np.asarray(indata))))
 
     def _threaded_callback(self, indata, outdata, frames, _time_info, status):
         if status:
@@ -258,6 +262,7 @@ class LiveRouter:
             if self._ring_in.count >= self.blocksize:
                 block, _ = self._ring_in.read(self.blocksize)
                 out = self.engine.process(block)
-                self._ring_out.write(out)
+                self._ring_out.write(self.limiter.process(
+                    np.asarray(out)))
             else:
                 time.sleep(0.002)

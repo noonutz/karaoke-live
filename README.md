@@ -113,6 +113,31 @@ instead of disappearing.
 Playback of a ready item replaces the capture source, so the panel is playing the file
 rather than your system audio; stop it to go back.
 
+## Playing with the song
+
+A queued song that was rendered to four stems (vocals / drums / bass / other) gets three
+controls, because that is what is actually useful while singing rather than DJing:
+
+- **ตัดกลอง** mutes the drums (drop them for the build, bring them back on the chorus).
+- **วน 4 ห้อง** loops four bars. The loop start snaps down to the bar grid computed from the
+  BPM measured at render time, so the loop is musical instead of wherever you clicked.
+- **เสียงร้อง** is the vocal-stem fader: 0 is a normal karaoke track, 50 is a backing vocal to
+  sing harmony with, 100 is the original.
+
+`Esc` (or the red **เงียบ** button) is the panic key: it stops playback and the live run in one
+press, and the panel can start again immediately.
+
+Stems stream from disk block by block — nothing loads a whole song into RAM — and a loop
+carries the sub-block remainder so it cannot drift.
+
+## Output limiter
+
+Every block on its way to the device goes through a stereo-linked peak limiter at -1 dBFS.
+Centre-cancel can boost panned content by up to +6 dB and stems sum, so without it a hot track
+clips in OBS. It has no lookahead on purpose: zero added latency, with a hard clip as the last
+resort for the single sample the attack cannot catch. The panel shows `GR -3.2 dB` while it is
+working.
+
 ## Vocal range fit
 
 `karaokelive range --from-file` estimates your comfortable range with an
@@ -174,6 +199,11 @@ the delay. Cover the video, or delay it in OBS by the same amount.
 
 ## Status
 
+- `limiter`: -12 dBFS passes untouched (GR 0.0, peak preserved), +12 dB over full scale comes
+  out at exactly 1.0 with GR -12.8 dB, recovery after 200 ms of silence, and ten 512-frame
+  blocks produce bit-identical output to one 5120-frame block.
+- `stems`: a 333-frame blocksize lands 96,237 frames of playback at 0.5049 s, 0.00 ms off the
+  expected position, and the block after a loop wrap matches the loop start sample for sample.
 - `range`: detected A3-E4, C4-C5, A2-A3, E3-E4, G3-G4 and D4-D5 exactly (0 misses,
   voiced 100%) on synthesised melodies.
 - `tempo`: 85-174 BPM within 1.5 BPM on click tracks, 0.05 confidence on white noise,
