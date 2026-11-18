@@ -8,11 +8,16 @@ import importlib.util
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
 import unittest
+import wave
 from pathlib import Path
+
+import numpy as np
 
 from karaokelive.prerender import PrerenderWorker, separate_file
 from karaokelive.setlist import Item, Setlist, default_state_dir
@@ -219,6 +224,91 @@ class WorkerTests(unittest.TestCase):
         self.assertFalse(worker.is_alive())
         self.assertEqual(done.instrumental, target)
         self.assertIsNone(done.error)
+
+    def test_stem_paths_are_transcoded_to_pcm(self):
+        """The worker's dict result holds `-pcm.wav` paths, each `wave`-openable."""
+        from unittest import mock
+
+        from karaokelive.stem_player import STEMS
+
+        sr = 48000
+        t = np.arange(sr, dtype=np.float64) / sr
+        real_run = subprocess.run  # captured before the patch; the mock is global
+
+        def fake_demucs(cmd, **kwargs):
+            if "demucs.separate" not in " ".join(str(part) for part in cmd):
+                return real_run(cmd, **kwargs)  # the PCM transcode
+            # Mimic demucs: write float32 WAV stems (what demucs actually
+            # writes) under <out_dir>/<model>/<track>/, then succeed.
+            out = Path(cmd[cmd.index("-o") + 1])
+            track_dir = out / "htdemucs" / "song"
+            track_dir.mkdir(parents=True, exist_ok=True)
+            for i, stem in enumerate(STEMS):
+                tone = 0.4 * np.sin(2 * np.pi * (220.0 + 110.0 * i) * t)
+                data = np.stack([tone, tone], axis=1).astype("<f4")
+                real_run(
+                    [shutil.which("ffmpeg"), "-v", "error", "-y",
+                     "-f", "f32le", "-ar", str(sr), "-ac", "2", "-i", "-",
+                     "-c:a", "pcm_f32le", str(track_dir / f"{stem}.wav")],
+                    input=data.tobytes(), check=True,
+                )
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        sl = self.make()
+        item = sl.add("/music/song.mp3")
+        with mock.patch("karaokelive.prerender.subprocess.run",
+                        side_effect=fake_demucs):
+            stems = separate_file("/music/song.mp3",
+                                  str(self.dir / "stems"))
+        self.assertEqual(set(stems), set(STEMS))
+        for stem in STEMS:
+            self.assertTrue(stems[stem].endswith("-pcm.wav"), stems[stem])
+            with wave.open(stems[stem], "rb") as wav:  # plain PCM: readable
+                self.assertEqual(wav.getsampwidth(), 2)
+                self.assertEqual(wav.getframerate(), sr)
+                self.assertEqual(wav.getnchannels(), 2)
+        # Demucs originals stay on disk untouched.
+        self.assertTrue((self.dir / "stems" / "htdemucs" / "song"
+                         / "vocals.wav").is_file())
+        # ... and the worker stores those same `-pcm.wav` paths.
+        out_paths = dict(stems)
+        sl2 = Setlist(path=self.dir / "setlist2.json")
+        item2 = sl2.add("/music/other.mp3")
+        worker = PrerenderWorker(sl2, str(self.dir / "stems"),
+                                 separator=lambda _src, _out: out_paths,
+                                 poll_s=0.05)
+        worker.start()
+        try:
+            done = _wait_for(sl2, item2.id, "ready")
+        finally:
+            worker.stop()
+        self.assertEqual(done.stems, out_paths)
+        self.assertTrue(all(p.endswith("-pcm.wav")
+                            for p in done.stems.values()))
+
+    def test_transcode_failure_names_the_stem(self):
+        """A corrupt demucs stem makes `separate_file` raise naming it."""
+        from unittest import mock
+
+        from karaokelive.stem_player import STEMS
+
+        real_run = subprocess.run  # captured before the patch: the transcode needs it
+
+        def fake_demucs(cmd, **kwargs):
+            if "demucs.separate" not in " ".join(str(part) for part in cmd):
+                return real_run(cmd, **kwargs)
+            out = Path(cmd[cmd.index("-o") + 1])
+            track_dir = out / "htdemucs" / "song"
+            track_dir.mkdir(parents=True, exist_ok=True)
+            for stem in STEMS:  # undecodable bytes: the transcode must fail
+                (track_dir / f"{stem}.wav").write_bytes(b"not audio at all")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with mock.patch("karaokelive.prerender.subprocess.run",
+                        side_effect=fake_demucs):
+            with self.assertRaises(RuntimeError) as ctx:
+                separate_file("/music/song.mp3", str(self.dir / "stems"))
+        self.assertIn("vocals", str(ctx.exception))
 
     def test_failure_marks_failed_and_does_not_retry(self):
         sl = self.make()

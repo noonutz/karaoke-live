@@ -28,13 +28,18 @@ def separate_file(source: str, out_dir: str, model: str = "htdemucs",
 
     Runs demucs **without** `--two-stems`, so it writes `vocals.wav`,
     `drums.wav`, `bass.wav` and `other.wav` under
-    `<out_dir>/<model>/<track name>/`, and returns a dict of those four
-    absolute paths.
+    `<out_dir>/<model>/<track name>/`. Each stem is then transcoded to a
+    sibling `<stem>-pcm.wav` (16-bit, 48 kHz, stereo plain PCM via
+    `audio_io.to_pcm_wav`) and a dict of those four PCM absolute paths is
+    returned -- demucs writes IEEE-float WAVs that stdlib `wave` (and
+    therefore `StemPlayer`) cannot open, so the player must see the PCM
+    copies. The demucs originals stay on disk untouched.
 
     Raises `RuntimeError` (carrying the last 20 lines of stderr) when demucs
     is missing or the separation fails, a Thai `RuntimeError` naming the
-    model and the file when demucs takes longer than `timeout` seconds, and
-    a Thai `RuntimeError` when any of the four stems is missing afterwards.
+    model and the file when demucs takes longer than `timeout` seconds, a
+    Thai `RuntimeError` when any of the four stems is missing afterwards,
+    and a `RuntimeError` naming the stem when its PCM transcode fails.
     No extra mix files are written -- the player mixes at playback time.
     """
     out = Path(out_dir)
@@ -67,7 +72,14 @@ def separate_file(source: str, out_dir: str, model: str = "htdemucs",
             raise RuntimeError(
                 f"แยกเสียงไม่สมบูรณ์ — ไม่พบสเต็ม {stem} ของโมเดล {model} "
                 f"ไฟล์ {source} ใน {out}")
-        stems[stem] = str(found.resolve())
+        pcm = found.with_name(f"{found.stem}-pcm.wav")
+        try:
+            stems[stem] = audio_io.to_pcm_wav(
+                found, pcm, sample_rate=48000, bits=16)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"แปลงสเต็ม {stem} ({found}) เป็น PCM WAV ไม่สำเร็จ: {exc}"
+            ) from exc
     return stems
 
 

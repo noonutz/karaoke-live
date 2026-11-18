@@ -54,13 +54,24 @@ class StemPlayer:
 
     @staticmethod
     def _open(path: str) -> wave.Wave_read | None:
-        """Open one stem WAV, or `None` when the file is missing (silence)."""
+        """Open one stem WAV, or `None` when the file is missing (silence).
+
+        A non-PCM WAV (e.g. a raw demucs float32 stem, or a 24-bit WAV with
+        a `WAVE_FORMAT_EXTENSIBLE` header that this Python's `wave` refuses)
+        raises `ValueError` naming the file and the required format, instead
+        of leaking `wave.Error`/`EOFError`.
+        """
         try:
             return wave.open(str(path), "rb")
         except FileNotFoundError:
             return None
         except OSError:
             return None
+        except (wave.Error, EOFError) as exc:
+            raise ValueError(
+                f"{path}: ต้องเป็นไฟล์ WAV แบบ PCM (16/24-bit) — "
+                "ไฟล์ float32 หรือ 24-bit แบบ EXTENSIBLE "
+                "อ่านด้วย wave ไม่ได้") from exc
 
     # -- properties -----------------------------------------------------
 

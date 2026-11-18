@@ -4,6 +4,8 @@ Run: .venv/bin/python -m unittest discover -s tests -t . -v
 """
 from __future__ import annotations
 
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -240,6 +242,48 @@ class StemPlayerTests(unittest.TestCase):
         self.assertEqual(player.gains["vocals"], 0.25)
         with self.assertRaises(KeyError):
             player.set_gain("kazoo", 1.0)
+
+    def _write_float_wav(self, path: Path, stem: str = "vocals") -> None:
+        """Write a float32 WAV the way demucs does (`-c:a pcm_f32le`)."""
+        data = np.ascontiguousarray(self.signals[stem], dtype="<f4")
+        subprocess.run(
+            [shutil.which("ffmpeg"), "-v", "error", "-y",
+             "-f", "f32le", "-ar", str(SR), "-ac", "2", "-i", "-",
+             "-c:a", "pcm_f32le", str(path)],
+            input=data.tobytes(), check=True,
+        )
+
+    def test_float_wav_raises_thai_pcm_error(self):
+        float_path = self.dir / "vocals-float.wav"
+        self._write_float_wav(float_path)
+        paths = dict(self.paths)
+        paths["vocals"] = str(float_path)
+        with self.assertRaises(ValueError) as ctx:
+            StemPlayer(paths)
+        self.assertIn("ต้องเป็นไฟล์ WAV แบบ PCM", str(ctx.exception))
+
+    def test_to_pcm_wav_makes_float_playable(self):
+        import wave
+
+        float_path = self.dir / "vocals-float.wav"
+        self._write_float_wav(float_path)
+        pcm_path = str(self.dir / "vocals-pcm.wav")
+        out = audio_io.to_pcm_wav(str(float_path), pcm_path)
+        self.assertEqual(out, pcm_path)
+        with wave.open(pcm_path, "rb") as wav:  # plain PCM: wave reads it
+            self.assertEqual(wav.getcomptype(), "NONE")
+            self.assertEqual(wav.getsampwidth(), 2)
+            self.assertEqual(wav.getframerate(), SR)
+            self.assertEqual(wav.getnchannels(), 2)
+        paths = dict(self.paths)
+        paths["vocals"] = pcm_path
+        player = StemPlayer(paths)
+        self.players.append(player)
+        mixed = self._read_all(player)
+        expected = np.clip(
+            sum(self.signals[s] for s in STEMS), -1.0, 1.0)
+        self.assertLess(float(np.abs(mixed - expected).max()), 1e-4)
+        self.assertGreater(float(np.abs(mixed).max()), 0.1)  # non-silent
 
     def test_short_stem_is_zero_padded(self):
         short = self.signals["other"][: N // 2]

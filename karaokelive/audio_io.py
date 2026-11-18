@@ -93,3 +93,38 @@ def save(path: str | Path, data: np.ndarray, sample_rate: int) -> None:
          "-ac", str(channels), "-i", "-", *codec, str(path)],
         input=data.tobytes(), check=True,
     )
+
+
+def to_pcm_wav(src: str | Path, dst: str | Path,
+               sample_rate: int = 48000, bits: int = 16) -> str:
+    """Transcode `src` to a plain-PCM WAV at `dst`; returns `str(dst)`.
+
+    This conversion exists because stdlib `wave` — and therefore
+    `StemPlayer` — can only read plain PCM WAVs (format tag `0x0001`).
+    Demucs writes IEEE-float WAVs (tag `0x0003`) that `wave.open` rejects
+    on every Python, and ffmpeg's 24-bit WAVs carry a
+    `WAVE_FORMAT_EXTENSIBLE` header that older Pythons (e.g. 3.11) refuse,
+    so separated stems must be normalized to plain PCM before playback.
+
+    Decodes `src` and re-encodes stereo `bits`-bit PCM (`pcm_s16le` for
+    `bits=16`, `pcm_s24le` for `bits=24`) at `sample_rate` Hz. 16-bit is
+    the default because it is the widest-readable choice. Anything else
+    for `bits` raises `ValueError`; a failed transcode raises
+    `RuntimeError` carrying the ffmpeg stderr tail.
+    """
+    codec = {16: "pcm_s16le", 24: "pcm_s24le"}.get(int(bits))
+    if codec is None:
+        raise ValueError(f"bits must be 16 or 24, got {bits!r}")
+    Path(dst).parent.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.run(
+        [_ffmpeg(), "-v", "error", "-y", "-i", str(src),
+         "-c:a", codec, "-ar", str(sample_rate), "-ac", "2", str(dst)],
+        capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        tail = (proc.stderr or "").strip().splitlines()[-20:]
+        detail = "\n".join(tail) if tail else f"exit code {proc.returncode}"
+        raise RuntimeError(
+            f"ffmpeg failed to transcode {src} to PCM WAV "
+            f"(exit {proc.returncode}):\n{detail}")
+    return str(dst)
